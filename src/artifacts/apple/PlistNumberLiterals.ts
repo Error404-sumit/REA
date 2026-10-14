@@ -12,7 +12,7 @@ const collector = () => {
   let incompleteMetadata = false;
   return {
     integer: (literal: string) => {
-      const exact = parsePlistIntegerLiteral(literal)?.exact;
+      const exact = parsePlistIntegerLiteral(literal);
       if (exact === undefined) {
         incompleteMetadata = true;
         return;

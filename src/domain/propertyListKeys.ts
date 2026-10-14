@@ -6,7 +6,7 @@ import {
 } from "@xmldom/xmldom";
 import { parse } from "plist";
 
-import { parsePlistIntegerLiteral } from "./apple/plistNumbers.js";
+import { parseHexadecimalPlistInteger } from "./apple/plistNumbers.js";
 import { MAX_PLIST_DEPTH } from "./apple/plistValue.js";
 
 /** The dictionary key REA results cannot carry: validation strips it. */
@@ -326,10 +326,8 @@ const hexadecimalIntegerSubstitutions = (
   Array.from(document.getElementsByTagName("integer")).flatMap((element) => {
     const node = element.firstChild;
     if (node === null || node.nodeValue === null) return [];
-    const literal = parsePlistIntegerLiteral(node.nodeValue);
-    return literal?.radix === 16
-      ? [{ node, text: literal.exact.toString() }]
-      : [];
+    const exact = parseHexadecimalPlistInteger(node.nodeValue);
+    return exact === undefined ? [] : [{ node, text: exact.toString() }];
   });
 
 /**
