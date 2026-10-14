@@ -1,5 +1,33 @@
 import type { JsonValue } from "../jsonValue.js";
 
+/** The exact value and spelling of one XML plist `<integer>` text. */
+export interface PlistIntegerLiteral {
+  readonly exact: bigint;
+  readonly radix: 10 | 16;
+}
+
+const INTEGER_LITERAL = /^([+-]?)(?:(0[xX])([\da-fA-F]+)|(\d+))$/u;
+
+/**
+ * Read `<integer>` text the way Apple's property-list parser does: optional
+ * sign, then decimal digits or a `0x`-prefixed hexadecimal literal. Text the
+ * parser rejects, such as embedded markup or stray characters, is undefined.
+ */
+export const parsePlistIntegerLiteral = (
+  text: string,
+): PlistIntegerLiteral | undefined => {
+  const match = INTEGER_LITERAL.exec(text.trim());
+  if (match === null) return undefined;
+  const [, sign, prefix, hexadecimal, decimal] = match;
+  const digits = hexadecimal ?? decimal;
+  if (digits === undefined) return undefined;
+  const magnitude = BigInt(prefix === undefined ? digits : `0x${digits}`);
+  return {
+    exact: sign === "-" ? -magnitude : magnitude,
+    radix: prefix === undefined ? 10 : 16,
+  };
+};
+
 /** Source element types needed to distinguish large integers from integral reals. */
 export interface PlistNumberLiterals {
   readonly integers: ReadonlyMap<number, ReadonlySet<string>>;
