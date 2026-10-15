@@ -9,6 +9,7 @@ import type { CdpConnection, CdpEvent } from "./CdpConnection.js";
 import type { CdpEndpointDiscovery, CdpEndpointTarget } from "./CdpEndpoint.js";
 import { CdpCaptureCompleteness } from "./CdpCaptureCompleteness.js";
 import {
+  admitRecords,
   delayWithCancellation,
   numberValue,
   recordValue,
@@ -30,7 +31,7 @@ import { captureElectronWorkers } from "./CdpElectronWorkers.js";
 import { authorizedElectronFile } from "./ElectronFileScope.js";
 import { compareUnicodeCodePoints } from "../domain/unicodeCodePointOrder.js";
 
-interface ElectronContext {
+export interface ElectronContext {
   readonly connection: CdpConnection;
   readonly sessionId: string | undefined;
   readonly discovery: CdpEndpointDiscovery;
@@ -267,7 +268,7 @@ export const captureFrames = async (
   return frames;
 };
 
-const captureResources = async (
+export const captureResources = async (
   context: ElectronContext,
   completeness: CdpCaptureCompleteness,
 ): Promise<ElectronPageInspection["resources"]> => {
@@ -314,7 +315,7 @@ const captureResources = async (
   );
 };
 
-const captureDom = async (
+export const captureDom = async (
   context: ElectronContext,
   completeness: CdpCaptureCompleteness,
 ): Promise<ElectronPageInspection["dom"]> => {
@@ -328,10 +329,16 @@ const captureDom = async (
   );
   const invalid = (count: number | null) =>
     completeness.exclude("dom", "invalid_protocol_value", count);
-  if (!Array.isArray(result.strings)) invalid(null);
-  const strings = Array.isArray(result.strings)
-    ? result.strings.map((value) => (typeof value === "string" ? value : ""))
-    : [];
+  // A snapshot without its string table cannot name any node, attribute, or
+  // document URL; resolving those indices against an absent table would
+  // fabricate empty names and misattribute every document as out of scope.
+  if (!Array.isArray(result.strings)) {
+    invalid(null);
+    return { total_nodes: 0, nodes: [] };
+  }
+  const strings = result.strings.map((value) =>
+    typeof value === "string" ? value : "",
+  );
   const nodes: ElectronPageInspection["dom"]["nodes"] = [];
   let total = 0;
   for (const document of snapshotDocuments(result.documents, invalid)) {
