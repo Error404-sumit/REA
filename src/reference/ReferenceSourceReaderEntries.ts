@@ -126,6 +126,7 @@ export const traverseDirectory = async (
   }
   if (isAborted(state.signal)) return { ok: false, error: cancelled() };
   if (readFailure !== undefined) {
+    if (current.path === state.root) return err(failure("io", readFailure));
     state.entries.push(
       entryFailure(
         pathFromRoot(state.root, current.path),
