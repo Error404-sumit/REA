@@ -1,6 +1,6 @@
 import { digestCanonicalValue } from "../domain/canonicalDigest.js";
 import { createEvidence } from "../domain/evidence.js";
-import { jsonValueSchema } from "../domain/jsonValue.js";
+import { artifactInventoryResultSchema } from "../domain/artifactGraph.js";
 
 const inventory = (
   format: "apk" | "ipa" | "directory" | "hap",
@@ -51,7 +51,7 @@ const inventory = (
     },
     "Artifact inventory",
   );
-  return jsonValueSchema.parse({
+  return artifactInventoryResultSchema.parse({
     manifest: {
       manifest_id: `agm_${digestCanonicalValue(
         {
@@ -72,6 +72,8 @@ const inventory = (
     occurrences,
     edges: [],
     provenance: [],
+    integrity_contradictions: [],
+    coverage: { scope: "root", status: "complete" },
     limitations: [],
   });
 };
