@@ -325,6 +325,14 @@ and top-level key when it upserts `rea`. WorkBuddy also reads a project-level
 user-level file only. Loading this registration and real REA tool calls
 through WorkBuddy are verified.
 
+If a gateway in front of WorkBuddy or CodeBuddy rejects the full catalog with
+HTTP 400 `code 11133` and an empty `param`, add
+`"REA_MCP_INPUT_SCHEMA_PROFILE": "compact"` to the `env` object of
+`mcpServers.rea` in that host's MCP config, then restart the host. The host
+name alone does not identify the downstream model; see
+[#2999](https://github.com/morluto/rea/issues/2999) and the compact profile
+section in [mcp-contracts.md](mcp-contracts.md).
+
 ## ZCode
 
 For [ZCode](https://zcode.z.ai/en/docs/mcp-services), setup registers `rea` in the nested `mcp.servers` table of the
@@ -332,6 +340,12 @@ user-level `~/.zcode/cli/config.json`. Entries carry `command`, `args`, and
 `env` without a transport discriminator. ZCode discovers personal skills from
 `~/.zcode/skills` rather than the shared directory, so setup installs its
 skill copy there.
+
+When that session routes through a WorkBuddy/CodeBuddy-backed gateway that
+rejects the full catalog with HTTP 400 `code 11133`, add
+`"REA_MCP_INPUT_SCHEMA_PROFILE": "compact"` to the `env` object of the
+`mcp.servers.rea` entry, then start a new ZCode session
+([#2999](https://github.com/morluto/rea/issues/2999)).
 
 ZCode reads the user-scope `~/.agents/mcp.json` fallback only while the native
 `.zcode` config defines no servers at all, with no merging. When setup writes
