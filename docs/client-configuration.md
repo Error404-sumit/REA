@@ -295,6 +295,18 @@ For [Factory Droid](https://docs.factory.com/harness/mcp), setup writes
 `~/.factory/skills` ([skills](https://docs.factory.com/harness/skills)), so
 setup installs its skill copy there.
 
+## ggcode
+
+For ggcode, setup appends a named entry to the top-level sequence of the
+user-level `~/.ggcode/mcp_servers.yaml`. Entries carry `name`, `type`
+(`stdio`), `command`, `args`, and `env`; an empty `type` also connects as
+stdio. ggcode auto-migrates a legacy `mcp_servers` section of the main
+`~/.ggcode/ggcode.yaml` into that standalone file and honors the section only
+while the file is absent, so setup reads it as a lower-precedence layer and
+seeds a freshly created standalone file with its entries instead of
+suppressing them. ggcode discovers personal skills from `~/.ggcode/skills`,
+so setup installs its skill copy there.
+
 ## Trae
 
 For [Trae](https://docs.trae.ai/ide/add-mcp-servers), setup writes

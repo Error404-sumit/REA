@@ -371,7 +371,8 @@ const registrationAligned = ({
   if (
     (client.format === "kimi" ||
       client.format === "omp" ||
-      client.format === "pi") &&
+      client.format === "pi" ||
+      client.format === "ggcode") &&
     registration.type !== undefined &&
     registration.type !== "stdio"
   )
@@ -468,7 +469,8 @@ const parseRegistration = (
   if (
     (client.format === "kimi" ||
       client.format === "omp" ||
-      client.format === "pi") &&
+      client.format === "pi" ||
+      client.format === "ggcode") &&
     registration.type !== undefined &&
     registration.type !== "stdio"
   )

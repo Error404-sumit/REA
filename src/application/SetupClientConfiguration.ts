@@ -2,6 +2,7 @@ import { readClientPolicyBlock } from "./GeminiClientSettings.js";
 import {
   readClientConfigurationFiles,
   effectiveClientConfiguration,
+  readConfigurationFile,
   readConfigurationText,
   type ClientConfigurationSource,
 } from "./ClientConfigurationFiles.js";
@@ -186,6 +187,14 @@ const configureClientDocument = async (
     throwCleanupFailure(fallback.error);
     return { status: "failed", reason: "readback" };
   }
+  const superseded = await readSupersededServers(
+    client,
+    original !== undefined,
+  );
+  if (!superseded.ok) {
+    throwCleanupFailure(superseded.error);
+    return { status: "failed", reason: "readback" };
+  }
   const desired = clientConfigurationDesired(
     client,
     environment,
@@ -205,7 +214,7 @@ const configureClientDocument = async (
     original,
     parsed,
     desired,
-    fallbackServers: fallback.value,
+    fallbackServers: { ...superseded.value, ...fallback.value },
   });
 };
 
@@ -506,6 +515,11 @@ const inspectClientDocument = async (
         throwCleanupFailure(fallback.error);
         return { status: "invalid", remediation: fallback.error.detail };
       }
+      const superseded = await readSupersededServers(client, false);
+      if (!superseded.ok) {
+        throwCleanupFailure(superseded.error);
+        return { status: "invalid", remediation: superseded.error.detail };
+      }
       return { status: "create" };
     }
     return {
@@ -583,6 +597,25 @@ const isMissing = (cause: unknown): boolean =>
 
 const throwCleanupFailure = (error: ClientConfigurationFileError): void => {
   if (error.cleanupFailure !== undefined) throw error.cleanupFailure;
+};
+
+/**
+ * Servers a freshly created write target supersedes, for example ggcode's
+ * in-main `mcp_servers` section once mcp_servers.yaml exists. Seeding the new
+ * file with them mirrors the client's own migration; an existing target is
+ * left alone so a superseded entry cannot resurrect behind the user's back.
+ */
+const readSupersededServers = async (
+  client: SetupClient,
+  targetExists: boolean,
+): Promise<
+  Result<Readonly<Record<string, unknown>>, ClientConfigurationFileError>
+> => {
+  const path = client.supersededConfigPath;
+  if (path === undefined || targetExists) return ok({});
+  const document = await readConfigurationFile(path, client.format);
+  if (!document.ok) return document;
+  return ok(document.value?.servers ?? {});
 };
 
 /** Admit the fallback only when the first native ZCode server would suppress it. */
