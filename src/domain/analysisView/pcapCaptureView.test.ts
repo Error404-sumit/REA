@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { AnalysisInputError } from "../analysisErrorCore.js";
 import { createEvidence } from "../evidence.js";
 import {
   projectAnalysisView,
@@ -96,4 +97,24 @@ it("pages diagnostics without splitting a surrogate pair", () => {
     offset = page.value.coverage.next_offset;
   }
   expect(text).toBe("ab😀cd");
+});
+
+it("locates a malformed parent through the request's own view source", () => {
+  const malformed = projectAnalysisView(
+    {
+      evidenceId: "ev_" + "b".repeat(64),
+      operation: "inspect_pcap_capture",
+      normalizedResult: {},
+      limitations: [],
+    },
+    { kind: "summary" },
+  );
+  if (malformed.ok) throw new Error("Expected the malformed parent to fail.");
+  if (!(malformed.error instanceof AnalysisInputError)) throw malformed.error;
+  expect(malformed.error.issues.length).toBeGreaterThan(0);
+  // Every analysis view reports a parent that does not satisfy its owning schema
+  // at the request's `source.normalized_result`, so a caller can correct the
+  // request without knowing which view raised the failure.
+  for (const { path } of malformed.error.issues)
+    expect(path.slice(0, 2)).toEqual(["source", "normalized_result"]);
 });
