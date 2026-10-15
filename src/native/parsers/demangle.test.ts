@@ -40,7 +40,7 @@ describe("parseDemangledSymbols", () => {
     ]);
   });
 
-  it("identifies invalid Swift symbols for every demangler mangling prefix", () => {
+it("identifies invalid Swift symbols for every demangler mangling prefix", () => {
     const inputs = [
       "_T0Bogus",
       "$SBogus",
