@@ -423,6 +423,50 @@ export const semanticMemberChain = (
   return { root: current, members: members.reverse() };
 };
 
+/**
+ * Whether no module or ambient write replaces `require` before `capture` runs.
+ * These checks are mandatory for every caller: a replaced loader is not the
+ * host loader regardless of how its binding resolves.
+ */
+export const semanticHostRequireWritesIntact = (
+  capture: t.Node,
+  state: JavaScriptSemanticAnalysisState,
+): boolean => {
+  const replacedBefore = (write: t.Node): boolean =>
+    !semanticTopLevelEffectFollowsCapture(capture, write, state.parentsByNode);
+  return (
+    !writesModuleRequire(state).some(replacedBefore) &&
+    !(state.ambientBindingWrites.get("require") ?? []).some(replacedBefore)
+  );
+};
+
+/**
+ * Whether `reference` reads the intact host `require` at the point `capture`
+ * runs. This is the single owner for the host-loader checks shared by the
+ * direct resolver and by the esbuild shim resolver, which reaches `require`
+ * only through a `typeof require` guard. It applies the mandatory write checks
+ * and the binding check together; a caller that has its own binding exception
+ * must still require {@link semanticHostRequireWritesIntact} separately.
+ */
+export const semanticHostRequireIntact = (
+  reference: t.Identifier,
+  capture: t.Node,
+  state: JavaScriptSemanticAnalysisState,
+): boolean =>
+  semanticHostRequireWritesIntact(capture, state) &&
+  semanticHostRequireBindingIntact(reference, state);
+
+/** Whether the `require` reference is the unmodified CommonJS wrapper loader. */
+const semanticHostRequireBindingIntact = (
+  reference: t.Identifier,
+  state: JavaScriptSemanticAnalysisState,
+): boolean => {
+  const binding = resolveSemanticBindingState(state, reference, "require");
+  if (binding !== undefined)
+    return isUnmodifiedCommonJsWrapperBinding(reference, "require", state);
+  return !semanticResolutionBlocked(state, reference, "require");
+};
+
 /** Recover an unshadowed literal require origin and its exact member path. */
 export const semanticRequireOrigin = (
   node: t.Node | null | undefined,
@@ -436,36 +480,18 @@ export const semanticRequireOrigin = (
     !t.isIdentifier(current.callee, { name: "require" })
   )
     return undefined;
-  if (
-    writesModuleRequire(state).some(
-      (write) =>
-        !semanticTopLevelEffectFollowsCapture(
-          current,
-          write,
-          state.parentsByNode,
-        ),
-    )
-  )
-    return undefined;
   const requireBinding = resolveSemanticBindingState(
     state,
     current.callee,
     "require",
   );
   if (
-    (requireBinding !== undefined &&
-      !isUnmodifiedCommonJsWrapperBinding(current.callee, "require", state) &&
-      !isWrapperRequireInitializerCall(requireBinding, current, state)) ||
-    (requireBinding === undefined &&
-      semanticResolutionBlocked(state, current.callee, "require")) ||
-    (state.ambientBindingWrites.get("require") ?? []).some(
-      (write) =>
-        !semanticTopLevelEffectFollowsCapture(
-          current,
-          write,
-          state.parentsByNode,
-        ),
-    )
+    !semanticHostRequireWritesIntact(current, state) ||
+    (!semanticHostRequireBindingIntact(current.callee, state) &&
+      !(
+        requireBinding !== undefined &&
+        isWrapperRequireInitializerCall(requireBinding, current, state)
+      ))
   )
     return undefined;
   const specifier = stringValue(current.arguments[0]);
