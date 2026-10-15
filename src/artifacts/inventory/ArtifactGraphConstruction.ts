@@ -1,3 +1,4 @@
+import { hasPsxExeSignature } from "../../domain/psxExe.js";
 import { compareUnicodeCodePoints } from "../../domain/unicodeCodePointOrder.js";
 import { isJavaScriptSourcePath } from "../../domain/javascript/javascriptArtifactFiles.js";
 import { digestCanonicalValue } from "../../domain/canonicalDigest.js";
@@ -534,6 +535,7 @@ export const classifyArtifactBytes = (
   prefix: Buffer,
   fileSize = prefix.length,
 ): ArtifactNode["format"] => {
+  if (hasPsxExeSignature(prefix)) return "psx-exe";
   if (hasZipSignature(prefix)) return "zip";
   if (hasBinaryPlistSignature(prefix)) return "plist";
   if (hasXmlPlistSignature(prefix)) return "plist";

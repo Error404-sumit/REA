@@ -29,6 +29,7 @@ export const ghidraProcessorUnsupportedReason = (
     !isGhidraPspTarget(target)
   )
     return ghidraMipsUnsupportedReason(target);
+  if (target.format !== "elf") return "PSP analysis requires ELF metadata.";
   const metadata = target.mips;
   if (metadata === undefined) return "PSP analysis requires ELF metadata.";
   const gnuAttributesReason =

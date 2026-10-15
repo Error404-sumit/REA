@@ -353,7 +353,7 @@ const probesForFormat = (
         authority: "native-analysis-provider",
       },
     ];
-  if (["mach-o", "mach-o-universal", "elf"].includes(format))
+  if (["mach-o", "mach-o-universal", "elf", "psx-exe"].includes(format))
     return [
       {
         operation: "open_binary",

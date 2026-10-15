@@ -67,6 +67,7 @@ const subjectFormatSchema = z.enum([
   "mach-o-universal",
   "javascript-bundle",
   "entitlements",
+  "psx-exe",
 ]);
 const subjectBaseSchema = z.strictObject({
   name: z.string().min(1),
