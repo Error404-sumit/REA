@@ -61,6 +61,7 @@ describe("client configuration filesystem lifecycle", () => {
       "devin",
       "opencode",
       "antigravity",
+      "antigravity_cli",
       "copilot_cli",
       "commandcode",
       "qwen_code",

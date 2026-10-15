@@ -216,6 +216,15 @@ where setup installs the bundled workflow.
 Antigravity 2.0 discovers personal skills in `~/.gemini/config/skills`.
 Setup installs its selected skill copy there.
 
+## Antigravity CLI
+
+The Antigravity CLI reads the same global `~/.gemini/config/mcp_config.json`
+registration file as the IDE, so the shared `mcpServers.rea` entry serves both
+surfaces. Global skills, however, load from the CLI's own
+`~/.gemini/antigravity-cli/skills` root, so setup installs a separate skill
+copy there (`antigravity_cli`). Uninstall removes the shared registration once
+and each surface's skill copy.
+
 ## Gemini CLI
 
 Gemini CLI uses `$GEMINI_CLI_HOME/.gemini/settings.json` when that home override
