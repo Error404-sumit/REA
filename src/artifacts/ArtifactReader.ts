@@ -118,7 +118,12 @@ export interface ArtifactTraversalOptions {
 
 /** Read-only adapter over one directory, archive, or virtual container. */
 export interface ArtifactReader {
-  readonly format: "directory" | ZipPackageFormat | "asar" | "file";
+  readonly format:
+    | "directory"
+    | ZipPackageFormat
+    | "asar"
+    | "godot-pck"
+    | "file";
   entries(
     signal?: AbortSignal,
     options?: ArtifactTraversalOptions,

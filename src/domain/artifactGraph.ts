@@ -41,6 +41,7 @@ const artifactFormatSchema = z.enum([
   "zip",
   "pkg",
   "asar",
+  "godot-pck",
   "javascript-bundle",
   "source-map",
   "mach-o-universal",
@@ -69,6 +70,7 @@ const artifactFormatSchema = z.enum([
 /** Formats established from bytes or a virtual directory tree, independent of path roles. */
 const artifactContentFormatSchema = artifactFormatSchema.extract([
   "zip",
+  "godot-pck",
   "mach-o-universal",
   "mach-o",
   "elf",

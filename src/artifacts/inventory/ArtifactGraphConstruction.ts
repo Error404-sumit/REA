@@ -1,3 +1,4 @@
+import { hasGodotPckHeader } from "../../domain/godotPckFormat.js";
 import { compareUnicodeCodePoints } from "../../domain/unicodeCodePointOrder.js";
 import { isJavaScriptSourcePath } from "../../domain/javascript/javascriptArtifactFiles.js";
 import { digestCanonicalValue } from "../../domain/canonicalDigest.js";
@@ -243,7 +244,7 @@ export const rootOccurrenceFor = (
   artifact_kind:
     metadata.format === "directory" ||
     isZipPackageFormat(metadata.format) ||
-    ["asar", "dmg", "pkg"].includes(metadata.format)
+    ["asar", "godot-pck", "dmg", "pkg"].includes(metadata.format)
       ? "container"
       : artifactRoleForFormat(metadata.path, metadata.format).kind,
   artifact_format: metadata.format,
@@ -521,6 +522,7 @@ const artifactRoleForFormat = (
       format: zipPackageFormatForPath(path) ?? format,
     };
   if (format === "plist") return { kind: "plist", format };
+  if (format === "godot-pck") return { kind: "container", format };
   return {
     kind: ["native-addon", "dynamic-library"].includes(byPath.kind)
       ? byPath.kind
@@ -535,6 +537,7 @@ export const classifyArtifactBytes = (
   fileSize = prefix.length,
 ): ArtifactNode["format"] => {
   if (hasZipSignature(prefix)) return "zip";
+  if (hasGodotPckHeader(prefix)) return "godot-pck";
   if (hasBinaryPlistSignature(prefix)) return "plist";
   if (hasXmlPlistSignature(prefix)) return "plist";
   const fatFormat = classifyFatArtifact(prefix, fileSize);

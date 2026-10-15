@@ -4,6 +4,7 @@ import type {
   ArtifactReaderTraversal,
 } from "../ArtifactReader.js";
 import { DirectoryArtifactReader } from "../DirectoryArtifactReader.js";
+import { GodotPckArtifactReader } from "../GodotPckArtifactReader.js";
 import { MachOSliceArtifactReader } from "../MachOSliceArtifactReader.js";
 import { NativeDmgArtifactReader } from "../NativeDmgArtifactReader.js";
 import { ZipArtifactReader } from "../ZipArtifactReader.js";
@@ -30,6 +31,8 @@ export const createReader = (
       return new DirectoryArtifactReader(path);
     case "asar":
       return new AsarArtifactReader(path);
+    case "godot-pck":
+      return new GodotPckArtifactReader(path, rootSource);
     case "mach-o-universal":
       return process.platform === "darwin"
         ? new MachOSliceArtifactReader(path, environment, undefined, rootSource)
