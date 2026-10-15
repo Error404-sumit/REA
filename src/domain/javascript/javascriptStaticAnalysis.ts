@@ -26,7 +26,6 @@ import {
   inspectRoleProperty,
   inspectRpcNode,
   finishRpcScanSteps,
-  indexVitePreloadDependencyTable,
 } from "./javascriptStaticAnalysisCalls.js";
 import {
   inspectBundlerRegistration,
@@ -52,6 +51,7 @@ import {
 
 import { createJavaScriptRpcScan } from "./javascriptRpcEndpoints.js";
 import { semanticImportEqualsSpecifier } from "./javascriptSemanticProjection.js";
+import { classifyParsedJavaScriptViteDependencySpecifiersSteps } from "./javascriptViteDependencies.js";
 import {
   hasUncertainTypeOnlyModuleSideEffect,
   isTypeOnlyExportDeclaration,
@@ -89,14 +89,19 @@ export function* analyzeParsedJavaScriptStaticSourceSteps(
     file.program,
     bindings,
   );
+  const viteDependencySpecifiers =
+    yield* classifyParsedJavaScriptViteDependencySpecifiersSteps(
+      file,
+      bindings,
+    );
   yield* traverseStaticSourceSteps(
     file,
     {
       source,
       accumulator,
-      vitePreloadDependencyTable: indexVitePreloadDependencyTable(file.program),
       openReceiverFacts: receivers.openReceivers,
       electronBindings: electronIdentity.bindings,
+      viteDependencySpecifiers,
       rpcScan: createJavaScriptRpcScan(source, receivers.rpcClientRoots, index),
     },
     bindings,
@@ -240,11 +245,10 @@ const inspectNode = (
     inspectBundlerBootstrap(source, node, accumulator, bindings);
     inspectBundlerRegistration(source, node, accumulator, bindings);
     inspectEsbuildWrapper(source, node, accumulator, bindings);
-    inspectCall(source, node, findings, bindings);
+    inspectCall(node, findings, bindings);
   } else if (t.isOptionalCallExpression(node)) {
-    inspectCall(source, node, findings, bindings);
-  } else if (t.isNewExpression(node))
-    inspectCall(source, node, findings, bindings);
+    inspectCall(node, findings, bindings);
+  } else if (t.isNewExpression(node)) inspectCall(node, findings, bindings);
   if (t.isTSImportEqualsDeclaration(node)) {
     const specifier = semanticImportEqualsSpecifier(node);
     if (specifier !== null)
