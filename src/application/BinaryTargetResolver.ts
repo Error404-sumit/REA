@@ -13,6 +13,7 @@ import { BinaryTargetError } from "../domain/configurationErrors.js";
 import {
   openRegularFile,
   sameRegularFileState,
+  sameRegularFileStateAcrossPathAndDescriptor,
 } from "../filesystem/RegularFile.js";
 import { AnalysisCancelledError } from "../domain/analysisErrorCore.js";
 import type { BinaryTarget } from "../domain/binaryTargetTypes.js";
@@ -425,7 +426,7 @@ const sha256Handle = async (
   const [opened, currentPath] = await Promise.all([handle.stat(), lstat(path)]);
   if (
     !sameRegularFileState(initial, opened) ||
-    !sameRegularFileState(initial, currentPath) ||
+    !sameRegularFileStateAcrossPathAndDescriptor(initial, currentPath) ||
     position !== initial.size
   )
     throw new BinaryTargetError(path, "target changed while being read");

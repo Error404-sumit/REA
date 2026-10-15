@@ -1,4 +1,4 @@
-import { constants } from "node:fs";
+import { constants, readFileSync } from "node:fs";
 import { constants as osConstants } from "node:os";
 import type { BigIntStats, Stats } from "node:fs";
 import { lstat, open, stat, type FileHandle } from "node:fs/promises";
@@ -92,7 +92,7 @@ export const openRegularFile = async (
       options.signal?.throwIfAborted();
       if (named.isSymbolicLink())
         throw new NonRegularFileReadError(path, false);
-      if (!sameRegularFileState(metadata, named))
+      if (!sameRegularFileStateAcrossPathAndDescriptor(metadata, named))
         throw new RegularFileChangedError(path);
     }
     return handle;
@@ -108,8 +108,8 @@ export const openRegularFile = async (
 
 /**
  * Some non-regular files cannot be opened at all: a Unix socket fails with
- * ENXIO on Linux and EOPNOTSUPP on macOS. Confirm such a failure against the
- * path's own metadata before reporting a non-regular selection.
+ * ENXIO on Linux and EOPNOTSUPP on macOS. Confirm such a failure against
+ * the path's own metadata before reporting a non-regular selection.
  */
 const nonRegularOpenFailure = async (
   path: string,
@@ -141,18 +141,129 @@ const isUnopenableFileTypeError = (cause: unknown): boolean =>
   typeof cause.errno === "number" &&
   UNOPENABLE_FILE_TYPE_ERRNOS.has(cause.errno);
 
-/** Compare one regular file's identity and mutable metadata across a read. */
+// S_IFMT isolates the file type from a POSIX mode value (regular file,
+// directory, socket, ...). The remaining bits are the permission bits.
+// Stats.mode is a Number and BigIntStats.mode is a BigInt; mixing the two in
+// a bitwise operation throws a TypeError, so both masks are needed.
+const FILE_TYPE_MASK = 0o170000;
+const FILE_TYPE_MASK_BIGINT = 0o170000n;
+
+const sameFileType = (
+  expected: number | bigint,
+  observed: number | bigint,
+): boolean => {
+  if (typeof expected === "bigint" && typeof observed === "bigint") {
+    return (
+      (expected & FILE_TYPE_MASK_BIGINT) === (observed & FILE_TYPE_MASK_BIGINT)
+    );
+  }
+  if (typeof expected === "bigint" || typeof observed === "bigint") {
+    // A Number and a BigInt cannot be mixed in one bitwise operation, so
+    // normalise both sides to Number. A POSIX mode always fits in 32 bits.
+    return (
+      (Number(expected) & FILE_TYPE_MASK) ===
+      (Number(observed) & FILE_TYPE_MASK)
+    );
+  }
+  return (expected & FILE_TYPE_MASK) === (observed & FILE_TYPE_MASK);
+};
+
+// The host does not change during a process lifetime, so the /proc probes run
+// once and their answer is cached. Without the cache every comparison would
+// re-read both files synchronously.
+let prootEnvironment: boolean | undefined;
+
+export const isPRootDistroEnvironment = (
+  environment: Readonly<NodeJS.ProcessEnv>,
+): boolean => environment.container === "proot-distro";
+
+export const hasPRootTemporaryMount = (mountInfo: string): boolean =>
+  mountInfo.split("\n").some((line) => {
+    const mountPoint = line
+      .split(" ")[4]
+      ?.replace(/\\([0-7]{3})/gu, (_, octal: string) =>
+        String.fromCharCode(Number.parseInt(octal, 8)),
+      );
+    return (
+      mountPoint !== undefined &&
+      /(?:^|\/)proot-[a-zA-Z0-9]{6,}(?:\/|$)/u.test(mountPoint)
+    );
+  });
+
+const detectPRootEnvironment = (): boolean => {
+  // PRoot-Distro exports this identity variable in login/run, including its
+  // minimal mode; unlike a bound /proc, it identifies the userspace runtime.
+  if (isPRootDistroEnvironment(process.env)) return true;
+  // Some custom runtime configurations expose PRoot in /proc/version; the
+  // standard Termux bind does not, so this is only an additional marker.
+  try {
+    if (readFileSync("/proc/version", "utf8").includes("PRoot")) return true;
+  } catch {
+    // /proc/version unreadable — fall through to the mountinfo probe.
+  }
+  // Inspect only mountinfo's mount-point field; source paths and mount
+  // options may contain unrelated names such as "/srv/proot-backups".
+  try {
+    if (hasPRootTemporaryMount(readFileSync("/proc/self/mountinfo", "utf8")))
+      return true;
+  } catch {
+    // /proc/self/mountinfo unreadable — treat the host as non-PRoot.
+  }
+  return false;
+};
+
+/**
+ * True on PRoot hosts (Termux on Android), where stat() and fstat() can
+ * report different mode permission bits and ctime for the same file. Only
+ * explicit path-to-descriptor comparisons use that compatibility allowance;
+ * descriptor-to-descriptor checks retain strict ctime validation.
+ */
+const isPRootEnvironment = (): boolean => {
+  prootEnvironment ??= detectPRootEnvironment();
+  return prootEnvironment;
+};
+
+/** Compare snapshots with strict metadata equality for one representation. */
 export const sameRegularFileState = (
   expected: Stats | BigIntStats,
   observed: Stats | BigIntStats,
-): boolean =>
-  observed.isFile() &&
-  expected.dev === observed.dev &&
-  expected.ino === observed.ino &&
-  expected.size === observed.size &&
-  expected.mode === observed.mode &&
-  ("mtimeNs" in expected && "mtimeNs" in observed
-    ? expected.mtimeNs === observed.mtimeNs &&
-      expected.ctimeNs === observed.ctimeNs
-    : expected.mtimeMs === observed.mtimeMs &&
-      expected.ctimeMs === observed.ctimeMs);
+): boolean => compareRegularFileState(expected, observed, false);
+
+/**
+ * Compare a path stat with a descriptor stat. PRoot can vary permission bits
+ * and ctime between those representations, but same-representation reads must
+ * retain strict ctime checks.
+ */
+export const sameRegularFileStateAcrossPathAndDescriptor = (
+  expected: Stats | BigIntStats,
+  observed: Stats | BigIntStats,
+): boolean => compareRegularFileState(expected, observed, true);
+
+const compareRegularFileState = (
+  expected: Stats | BigIntStats,
+  observed: Stats | BigIntStats,
+  allowPRootRepresentationDifferences: boolean,
+): boolean => {
+  if (!observed.isFile()) return false;
+  if (expected.dev !== observed.dev) return false;
+  if (expected.ino !== observed.ino) return false;
+  if (expected.size !== observed.size) return false;
+  if (allowPRootRepresentationDifferences && isPRootEnvironment()) {
+    if (!sameFileType(expected.mode, observed.mode)) return false;
+    if ("mtimeNs" in expected && "mtimeNs" in observed) {
+      if (expected.mtimeNs !== observed.mtimeNs) return false;
+    } else {
+      if (expected.mtimeMs !== observed.mtimeMs) return false;
+    }
+  } else {
+    if (expected.mode !== observed.mode) return false;
+    if ("mtimeNs" in expected && "mtimeNs" in observed) {
+      if (expected.mtimeNs !== observed.mtimeNs) return false;
+      if (expected.ctimeNs !== observed.ctimeNs) return false;
+    } else {
+      if (expected.mtimeMs !== observed.mtimeMs) return false;
+      if (expected.ctimeMs !== observed.ctimeMs) return false;
+    }
+  }
+  return true;
+};

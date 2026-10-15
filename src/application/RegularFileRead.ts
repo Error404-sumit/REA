@@ -5,6 +5,7 @@ import {
   RegularFileAdmissionFailure,
   openRegularFile,
   sameRegularFileState,
+  sameRegularFileStateAcrossPathAndDescriptor,
   RegularFileChangedError,
 } from "../filesystem/RegularFile.js";
 import { OwnedFileHandle } from "../filesystem/OwnedFileHandle.js";
@@ -123,7 +124,7 @@ const withRegularFileOwned = async <Value>(
     ]);
     if (
       !sameRegularFileState(stats, opened) ||
-      !sameRegularFileState(stats, currentPath)
+      !sameRegularFileStateAcrossPathAndDescriptor(stats, currentPath)
     )
       throw new RegularFileChangedError(path);
     outcome = { kind: "completed", value };

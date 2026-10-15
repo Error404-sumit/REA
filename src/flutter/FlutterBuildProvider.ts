@@ -37,6 +37,7 @@ import {
   openRegularFile,
   RegularFileAdmissionFailure,
   sameRegularFileState,
+  sameRegularFileStateAcrossPathAndDescriptor,
 } from "../filesystem/RegularFile.js";
 import {
   MAX_SNAPSHOT_HASH_CANDIDATES,
@@ -443,7 +444,7 @@ export class FlutterBuildProvider {
       if (
         BigInt(copiedBytes) !== before.size ||
         !sameRegularFileState(before, after) ||
-        !sameRegularFileState(before, currentPath)
+        !sameRegularFileStateAcrossPathAndDescriptor(before, currentPath)
       )
         throw new AnalysisArtifactChangedError(
           operation,

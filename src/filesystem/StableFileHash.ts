@@ -5,6 +5,7 @@ import {
   openRegularFile,
   RegularFileChangedError,
   sameRegularFileState,
+  sameRegularFileStateAcrossPathAndDescriptor,
 } from "./RegularFile.js";
 
 /** Hash one regular file from its admitted descriptor and verify its path state. */
@@ -45,7 +46,7 @@ export const hashStableFile = async (
     if (
       position !== initial.size ||
       !sameRegularFileState(initial, opened) ||
-      !sameRegularFileState(initial, currentPath)
+      !sameRegularFileStateAcrossPathAndDescriptor(initial, currentPath)
     )
       throw new RegularFileChangedError(path);
     return { sha256: hash.digest("hex"), bytes: position };

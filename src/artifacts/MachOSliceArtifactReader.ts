@@ -28,6 +28,7 @@ import {
   RegularFileAdmissionFailure,
   openRegularFile,
   sameRegularFileState,
+  sameRegularFileStateAcrossPathAndDescriptor,
   type StableRegularFileDescriptor,
 } from "../filesystem/RegularFile.js";
 import { readFileHandleChunks } from "../filesystem/readFileHandleChunks.js";
@@ -423,7 +424,7 @@ export class MachOSliceArtifactReader implements ArtifactReader {
     ]);
     if (
       !sameRegularFileState(source.initial, opened) ||
-      !sameRegularFileState(source.initial, currentPath)
+      !sameRegularFileStateAcrossPathAndDescriptor(source.initial, currentPath)
     )
       throw new ArtifactReaderFailure(
         "integrity",

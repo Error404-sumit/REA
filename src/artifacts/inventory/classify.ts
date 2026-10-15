@@ -1,4 +1,7 @@
-import { sameRegularFileState } from "../../filesystem/RegularFile.js";
+import {
+  sameRegularFileState,
+  sameRegularFileStateAcrossPathAndDescriptor,
+} from "../../filesystem/RegularFile.js";
 import type { FileHandle } from "node:fs/promises";
 import type { Stats } from "node:fs";
 import type { StableRegularFileDescriptor } from "../../filesystem/RegularFile.js";
@@ -106,7 +109,7 @@ export const classifyAndHashRootForInventory = async (
     | { readonly kind: "failed"; readonly cause: unknown };
   try {
     const initial = await handle.stat();
-    if (!sameRegularFileState(expectedMetadata, initial))
+    if (!sameRegularFileStateAcrossPathAndDescriptor(expectedMetadata, initial))
       throw new ArtifactReaderFailure(
         "integrity",
         `Root artifact changed before inventory: ${path}`,

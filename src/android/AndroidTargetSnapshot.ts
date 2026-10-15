@@ -11,6 +11,7 @@ import {
 import {
   openRegularFile,
   sameRegularFileState,
+  sameRegularFileStateAcrossPathAndDescriptor,
 } from "../filesystem/RegularFile.js";
 import type { AndroidOperation } from "../domain/android/androidAnalysis.js";
 
@@ -151,7 +152,7 @@ const verifySourceState = async (
   if (
     observedBytes !== initial.size ||
     !sameRegularFileState(initial, opened) ||
-    !sameRegularFileState(initial, currentPath)
+    !sameRegularFileStateAcrossPathAndDescriptor(initial, currentPath)
   )
     throw new AndroidSnapshotChangedError(
       `Android input changed while being read: ${path}`,

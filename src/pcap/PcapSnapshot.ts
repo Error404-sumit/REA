@@ -15,6 +15,7 @@ import {
   openRegularFile,
   RegularFileAdmissionFailure,
   sameRegularFileState,
+  sameRegularFileStateAcrossPathAndDescriptor,
 } from "../filesystem/RegularFile.js";
 import { PrivateRuntimeRoot } from "../process/PrivateRuntimeRoot.js";
 import { PrivateRuntimeRootUnavailableError } from "../process/PrivateRuntimeRootUnavailableError.js";
@@ -173,7 +174,7 @@ export class PcapSnapshot {
       if (
         BigInt(copied) !== before.size ||
         !sameRegularFileState(before, after) ||
-        !sameRegularFileState(before, selected)
+        !sameRegularFileStateAcrossPathAndDescriptor(before, selected)
       )
         throw new AnalysisArtifactChangedError(
           OPERATION,
@@ -233,7 +234,7 @@ export class PcapSnapshot {
         bytes !== expected.bytes ||
         hash.digest("hex") !== expected.sha256 ||
         !sameRegularFileState(before, after) ||
-        !sameRegularFileState(before, selected)
+        !sameRegularFileStateAcrossPathAndDescriptor(before, selected)
       )
         throw new AnalysisArtifactChangedError(
           OPERATION,

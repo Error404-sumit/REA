@@ -10,6 +10,7 @@ import {
   RegularFileAdmissionFailure,
   openRegularFile,
   sameRegularFileState,
+  sameRegularFileStateAcrossPathAndDescriptor,
 } from "../../filesystem/RegularFile.js";
 import {
   abortIfNeeded,
@@ -108,7 +109,7 @@ export const hashStableRootArtifactHandle = async (
   const [opened, currentPath] = await Promise.all([handle.stat(), lstat(path)]);
   if (
     !sameRegularFileState(initial, opened) ||
-    !sameRegularFileState(initial, currentPath) ||
+    !sameRegularFileStateAcrossPathAndDescriptor(initial, currentPath) ||
     digest.bytes !== initial.size
   )
     throw new ArtifactReaderFailure(

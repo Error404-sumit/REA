@@ -5,6 +5,7 @@ import { z } from "zod";
 import {
   openRegularFile,
   sameRegularFileState,
+  sameRegularFileStateAcrossPathAndDescriptor,
 } from "../filesystem/RegularFile.js";
 import {
   AnalysisCancelledError,
@@ -129,7 +130,7 @@ export const inspectGhidraPspExtension = async (
       }
       if (
         !sameRegularFileState(before, await handle.stat()) ||
-        !sameRegularFileState(before, await lstat(path))
+        !sameRegularFileStateAcrossPathAndDescriptor(before, await lstat(path))
       )
         throw new Error(
           `Allegrex component changed during inspection: ${relative}`,
