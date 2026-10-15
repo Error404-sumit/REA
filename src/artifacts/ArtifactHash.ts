@@ -1,3 +1,4 @@
+import { AsarSignature } from "./AsarSignature.js";
 import { createHash } from "node:crypto";
 import type { Readable } from "node:stream";
 
@@ -13,6 +14,7 @@ export type HashResult = {
   readonly sha256: string;
   readonly bytes: number;
   readonly prefix: Buffer;
+  readonly asarHeader: boolean;
 };
 
 /** Bounded classification evidence; this is not an executable format size limit. */
@@ -33,6 +35,7 @@ export const hashReadable = async (
   signal?: AbortSignal,
 ): Promise<HashResult> => {
   const hash = createHash("sha256");
+  const asarSignature = new AsarSignature();
   const prefixes: Buffer[] = [];
   let prefixBytes = 0;
   const xmlProbe = createXmlPlistSignatureProbe();
@@ -42,6 +45,7 @@ export const hashReadable = async (
     const chunk = streamChunkToBuffer(raw);
     bytes += chunk.length;
     hash.update(chunk);
+    asarSignature.write(chunk);
     let chunkOffset = 0;
     while (
       chunkOffset < chunk.length &&
@@ -63,5 +67,10 @@ export const hashReadable = async (
       xmlProbe.write(selected);
     }
   }
-  return { sha256: hash.digest("hex"), bytes, prefix: Buffer.concat(prefixes) };
+  return {
+    sha256: hash.digest("hex"),
+    bytes,
+    prefix: Buffer.concat(prefixes),
+    asarHeader: asarSignature.matched,
+  };
 };

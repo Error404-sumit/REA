@@ -1,3 +1,4 @@
+import { AsarSignature } from "../AsarSignature.js";
 import { compareUnicodeCodePoints } from "../../domain/unicodeCodePointOrder.js";
 import { isJavaScriptSourcePath } from "../../domain/javascript/javascriptArtifactFiles.js";
 import { digestCanonicalValue } from "../../domain/canonicalDigest.js";
@@ -471,6 +472,7 @@ export const classifyArtifactContent = (
   path: string,
   prefix: Buffer,
   fileSize = prefix.length,
+  asarHeader = hasAsarHeader(prefix),
 ): {
   readonly kind: ArtifactOccurrence["artifact_kind"];
   readonly format: ArtifactOccurrence["artifact_format"];
@@ -484,11 +486,7 @@ export const classifyArtifactContent = (
       path.toLowerCase().endsWith(".asar"))
   )
     return byPath;
-  if (
-    format === "file" &&
-    path.toLowerCase().endsWith(".asar") &&
-    hasAsarHeader(prefix)
-  )
+  if (format === "file" && path.toLowerCase().endsWith(".asar") && asarHeader)
     return { kind: "container", format: "asar" };
   return artifactRoleForFormat(path, format);
 };
@@ -498,14 +496,9 @@ export const classifyArtifactContent = (
  * a header pickle whose payload begins with a JSON object.
  */
 export const hasAsarHeader = (prefix: Buffer): boolean => {
-  if (prefix.length < 17 || prefix.readUInt32LE(0) !== 4) return false;
-  const headerSize = prefix.readUInt32LE(4);
-  const payloadSize = prefix.readUInt32LE(8);
-  if (headerSize < 16 || payloadSize !== headerSize - 4) return false;
-  const stringLength = prefix.readUInt32LE(12);
-  return (
-    stringLength >= 2 && stringLength <= payloadSize - 4 && prefix[16] === 0x7b
-  );
+  const signature = new AsarSignature();
+  signature.write(prefix);
+  return signature.matched;
 };
 
 const artifactRoleForFormat = (

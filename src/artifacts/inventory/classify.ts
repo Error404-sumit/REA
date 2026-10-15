@@ -123,7 +123,15 @@ export const classifyAndHashRootForInventory = async (
     outcome = {
       kind: "completed",
       value: {
-        format,
+        format:
+          format === "file"
+            ? classifyArtifactContent(
+                path,
+                digest.prefix,
+                digest.bytes,
+                digest.asarHeader,
+              ).format
+            : format,
         digest,
         rootSource: retainSource
           ? { handle, initial, owner: ownedHandle }
