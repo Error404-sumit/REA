@@ -264,15 +264,23 @@ export class PlaywrightScenarioSession implements BrowserScenarioSessionPort {
         let storageFailure: { readonly cause: unknown } | undefined;
         let policyFailure: { readonly cause: unknown } | undefined;
         let browserFailure: { readonly cause: unknown } | undefined;
+        const storageStopsLoading =
+          storage !== undefined && options.signal?.aborted === true;
+        let policyStopsLoading = !storageStopsLoading;
         if (!storageReleased) {
           try {
-            await storage?.close(options.signal?.aborted === true);
+            await storage?.close(storageStopsLoading);
           } catch (failure: unknown) {
             storageFailure = { cause: failure };
+            // Ownership transfers only after the storage attempt is no longer
+            // in flight. Its failure does not establish that navigation stop
+            // succeeded, so the policy owner must confirm it before release.
+            policyStopsLoading = true;
           }
         }
         try {
-          if (!opened.cleanup.browserClosed) await serviceWorkers?.close(true);
+          if (!opened.cleanup.browserClosed)
+            await serviceWorkers?.close(policyStopsLoading);
         } catch (failure: unknown) {
           policyFailure = { cause: failure };
         }
@@ -394,16 +402,18 @@ export class PlaywrightScenarioSession implements BrowserScenarioSessionPort {
     let storageFailure: { readonly cause: unknown } | undefined;
     let policyFailure: { readonly cause: unknown } | undefined;
     let browserFailure: { readonly cause: unknown } | undefined;
+    let policyStopsLoading = stopLoading && this.storage === undefined;
     if (!this.#storageReleased) {
       try {
         await this.storage?.close(stopLoading);
       } catch (failure: unknown) {
         storageFailure = { cause: failure };
+        policyStopsLoading = stopLoading;
       }
     }
     try {
       if (!this.opened.cleanup.browserClosed)
-        await this.serviceWorkers?.close(stopLoading);
+        await this.serviceWorkers?.close(policyStopsLoading);
     } catch (failure: unknown) {
       policyFailure = { cause: failure };
     }

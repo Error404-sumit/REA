@@ -615,33 +615,40 @@ const verifyCancelledStorage = async (
     expression: "performance.timeOrigin",
     returnByValue: true,
   });
-  const pending = createBrowserScenarioProvider(process.env).captureScenario(
-    cancelledScenario,
-    { signal: controller.signal },
-  );
-  await waitForNewDocument(
-    observer,
-    "/storage-main",
-    priorDocument.result.value,
-  );
-  const state = await observer.send("Runtime.evaluate", {
-    expression:
-      "JSON.parse(document.querySelector('#main-report').textContent)",
-    returnByValue: true,
+  const provider = createBrowserScenarioProvider(process.env);
+  const pending = provider.captureScenario(cancelledScenario, {
+    signal: controller.signal,
   });
-  assert.deepEqual(state.result.value, {
-    local: "main-initial",
-    session: "main-session-initial",
-    removed: "main-remove-seed",
-    empty: "main-empty-seed",
-  });
-  controller.abort(new Error("cancel storage seed scenario"));
-  const result = await pending;
-  assert.ok(
-    !result.ok ||
+  let result;
+  try {
+    await waitForNewDocument(
+      observer,
+      "/storage-main",
+      priorDocument.result.value,
+    );
+    const state = await observer.send("Runtime.evaluate", {
+      expression:
+        "JSON.parse(document.querySelector('#main-report').textContent)",
+      returnByValue: true,
+    });
+    assert.deepEqual(state.result.value, {
+      local: "main-initial",
+      session: "main-session-initial",
+      removed: "main-remove-seed",
+      empty: "main-empty-seed",
+    });
+    controller.abort(new Error("cancel storage seed scenario"));
+    result = await pending;
+  } finally {
+    controller.abort(new Error("cancel failed storage verification"));
+    await provider.close();
+  }
+  if (result.ok)
+    assert.ok(
       result.value.steps.some(({ status }) => status === "cancelled"),
-    "Cancellation unexpectedly completed every scenario step",
-  );
+      "Cancellation unexpectedly completed every scenario step",
+    );
+  else assert.equal(result.error._tag, "AnalysisCancelledError");
   const targets = await (await fetch(`${endpoint}/json/list`)).json();
   assert.ok(
     targets.some(({ id }) => id === targetId),
