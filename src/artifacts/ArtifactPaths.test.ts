@@ -4,6 +4,7 @@ import {
   ArtifactPathRegistry,
   annotateEnglishUnicodeCaseCollisions,
   ENGLISH_UNICODE_CASE_INVENTORY_LIMITATION,
+  normalizeArtifactPath,
 } from "./ArtifactPaths.js";
 
 const NOTE =
@@ -124,3 +125,36 @@ const caseVariants = (lowercase: string, count: number): string[] =>
       )
       .join(""),
   );
+
+describe("normalizeArtifactPath absolute-path rejection", () => {
+  it.each([
+    ["a:b.txt"],
+    ["a:b.txt/child.txt"],
+    ["x:y"],
+    ["1:2.txt"],
+    // Drive-relative and single-letter-colon names are indistinguishable from a
+    // literal POSIX name; only a drive prefix followed by a separator is absolute.
+    ["c:file.txt"],
+    ["D:relative\\child"],
+  ])("keeps a literal POSIX name %j with a leading colon", (name) => {
+    expect(normalizeArtifactPath(name)).toBe(name);
+  });
+
+  it.each([["C:/outside"], ["C:\\outside"], ["d:/lower"]])(
+    "still rejects the Windows drive-absolute path %j",
+    (name) => {
+      expect(() => normalizeArtifactPath(name)).toThrow(
+        "Artifact path is absolute or unsafe",
+      );
+    },
+  );
+
+  it.each([["/outside"], ["//server/share"], ["safe/\0bad"]])(
+    "still rejects the absolute or unsafe path %j",
+    (name) => {
+      expect(() => normalizeArtifactPath(name)).toThrow(
+        "Artifact path is absolute or unsafe",
+      );
+    },
+  );
+});

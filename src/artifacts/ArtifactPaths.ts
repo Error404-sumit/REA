@@ -4,7 +4,10 @@ import { logicalPathNfc } from "../domain/artifactIdentity.js";
 import { compareUnicodeCodePoints } from "../domain/unicodeCodePointOrder.js";
 import { ArtifactReaderFailure } from "./ArtifactReader.js";
 
-const DRIVE_PREFIX = /^[A-Za-z]:/u;
+// A drive-absolute path (`C:/…`, `C:\…`) is rejected, but a literal POSIX name
+// such as `a:b.txt` or the ambiguous drive-relative form `C:file.txt` is not,
+// because the drive prefix cannot be told apart from an ordinary name.
+const DRIVE_ABSOLUTE = /^[A-Za-z]:[\\/]/u;
 
 /**
  * English Unicode case folding used only to describe logical names a
@@ -22,7 +25,11 @@ export const DESTINATION_CASE_COLLISION_PREFIX =
 
 /** Normalize slash-separated logical names; backslashes are literal components. */
 export const normalizeArtifactPath = (input: string): string => {
-  if (input.includes("\0") || input.startsWith("/") || DRIVE_PREFIX.test(input))
+  if (
+    input.includes("\0") ||
+    input.startsWith("/") ||
+    DRIVE_ABSOLUTE.test(input)
+  )
     throw new ArtifactReaderFailure(
       "path",
       `Artifact path is absolute or unsafe: ${JSON.stringify(input)}`,
