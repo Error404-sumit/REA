@@ -50,15 +50,14 @@ export const clientRegistrationEnvironmentDetails = (
   resolveProviderRequestBudget?: ProviderRequestBudgetResolver,
 ): Result<ClientRegistrationEnvironmentDetails, ConfigurationError> => {
   if (parsed?.dialect === "dsh") {
-    const environment = dshDocument(parsed.document).environment(
-      overrides,
-      validation,
-    );
+    const document = dshDocument(parsed.document);
+    const environment = document.environment(overrides, validation);
     if (!environment.ok) return environment;
     return validatedDetails(
       environment.value,
       validation,
       resolveProviderRequestBudget,
+      document.unresolvedEnvironmentSettings(overrides),
     );
   }
   const key =
@@ -100,11 +99,12 @@ const validatedDetails = (
   environment: Readonly<Record<string, string>>,
   validation: "fragment" | "effective",
   resolveProviderRequestBudget?: ProviderRequestBudgetResolver,
+  unresolvedSettings: ReadonlySet<string> = new Set(),
 ): Result<ClientRegistrationEnvironmentDetails, ConfigurationError> => {
   const validated =
     validation === "fragment"
       ? parseEnvironmentValues(environment)
-      : parseEnvironment(environment);
+      : parseEnvironment(environment, unresolvedSettings);
   if (!validated.ok) return validated;
   const providerRequestBudget =
     resolveProviderRequestBudget?.(

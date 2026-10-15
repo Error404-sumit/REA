@@ -86,6 +86,7 @@ const registrationSchema = z
     tool_timeout_sec: z.number().positive().optional(),
     startupTimeoutMs: z.number().positive().optional(),
     toolTimeoutMs: z.number().positive().optional(),
+    toolCallTimeoutMs: z.number().positive().optional(),
     type: z.string().optional(),
     transport: z.string().optional(),
     serverName: z.string().optional(),
@@ -228,7 +229,9 @@ export const readClientRegistrationInspections = async (
           : client;
       const registration = parseRegistration(raw, effectiveClient);
       const registrationEnvironment =
-        client.name === "kimi" || client.name === "codex"
+        client.name === "kimi" ||
+        client.name === "codex" ||
+        client.name === "dsh"
           ? clientRegistrationEnvironmentDetails(
               parsed,
               {},
@@ -385,6 +388,10 @@ const registrationAligned = ({
     (registration.serverName !== "rea" || registration.transport !== "stdio")
   )
     return "stale";
+  // A registration without a usable toolCallTimeoutMs keeps DeepSeek Harness's
+  // 60-second default, which a native provider startup alone can exceed.
+  if (client.format === "dsh" && registration.toolCallTimeoutMs === undefined)
+    return "stale";
   if (
     client.format === "copilot_cli" &&
     (registration.type !== "stdio" ||
@@ -433,6 +440,12 @@ const parseRegistration = (
   if (client.format === "dsh")
     return registrationSchema
       .pick({ command: true, args: true, serverName: true, transport: true })
+      .extend({
+        // An unevaluated Cordis expression or malformed literal is not a
+        // usable deadline; alignment reports the registration stale so setup
+        // repairs it with the recommended literal.
+        toolCallTimeoutMs: z.number().positive().optional().catch(undefined),
+      })
       .strip()
       .parse(value);
   if (client.format === "opencode") {
@@ -528,20 +541,27 @@ const timeoutAdvisory = (
       ? registration.toolTimeoutMs
       : client.name === "codex"
         ? registration.tool_timeout_sec
-        : undefined;
+        : client.name === "dsh"
+          ? registration.toolCallTimeoutMs
+          : undefined;
   if (toolTimeout === undefined) return undefined;
   const providerAllowance = mcpProviderDeadlineAllowanceMs(timeoutInputs);
-  const isKimi = client.name === "kimi";
-  const toolTimeoutMs = isKimi ? toolTimeout : toolTimeout * 1000;
+  const inMilliseconds = client.name === "kimi" || client.name === "dsh";
+  const toolTimeoutMs = inMilliseconds ? toolTimeout : toolTimeout * 1000;
   if (toolTimeoutMs >= providerAllowance) return undefined;
-  const setting = isKimi ? "toolTimeoutMs" : "tool_timeout_sec";
-  const currentValue = isKimi
+  const setting =
+    client.name === "kimi"
+      ? "toolTimeoutMs"
+      : client.name === "dsh"
+        ? "toolCallTimeoutMs"
+        : "tool_timeout_sec";
+  const currentValue = inMilliseconds
     ? `${String(toolTimeout)} ms`
     : `${String(toolTimeout)} seconds`;
-  const recommendedValue = isKimi
+  const recommendedValue = inMilliseconds
     ? `${String(recommendedMcpToolTimeoutMs(timeoutInputs))} ms`
     : `${String(recommendedMcpToolTimeoutSeconds(timeoutInputs))} seconds`;
-  const headroom = isKimi
+  const headroom = inMilliseconds
     ? `${String(MCP_STARTUP_POLICY.toolOperationHeadroomMs)} ms`
     : `${String(MCP_STARTUP_POLICY.toolOperationHeadroomMs / 1000)} seconds`;
   return `The configured ${setting} (${currentValue}) is shorter than REA's known provider allowance (${String(providerAllowance)} ms), so provider startup or an upstream request may exceed this client deadline. REA recommends ${setting} = ${recommendedValue} to cover that allowance plus ${headroom} of operation headroom; this additional headroom is a recommendation, not a guarantee for every analysis.`;

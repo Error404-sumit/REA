@@ -693,16 +693,22 @@ const clientConfigurationDesired = (
   const launcher =
     command.length === 0 ? [PRODUCT_IDENTITY.cliBinary, "mcp"] : command;
   if (format === "dsh") {
-    const validated = clientRegistrationEnvironment(
+    const validated = clientRegistrationEnvironmentDetails(
       effective,
       providerEnvironment,
+      "effective",
+      resolveProviderRequestBudget,
     );
     if (!validated.ok) throw validated.error;
     const desired = (
       parsed === undefined
         ? new DshCordisDocument("")
         : dshDocument(parsed.document)
-    ).desired(launcher, providerEnvironment);
+    ).desired(
+      launcher,
+      providerEnvironment,
+      recommendedMcpToolTimeoutMs(validated.value.timeoutInputs),
+    );
     if (!desired.ok) throw desired.error;
     return desired.value;
   }
