@@ -132,7 +132,7 @@ export const projectHarmonyApplication = (
       rootFormat === "app-pack"
         ? all.filter(({ path }) => /\.(?:hap|hsp)$/iu.test(path))
         : [],
-    runtime_families: runtimeFamilies(all),
+    runtime_families: runtimeFamilies(all, classified.javascript),
     bridge_candidates: bridgeProjection.candidates,
     bridge_candidate_coverage: bridgeProjection.coverage,
     coverage: projectionCoverage(
@@ -192,7 +192,10 @@ const classify = (all: readonly Component[]) => ({
   ),
 });
 
-const runtimeFamilies = (all: readonly Component[]) => {
+const runtimeFamilies = (
+  all: readonly Component[],
+  javascript: readonly Component[],
+) => {
   const paths = all.map(({ path }) => path.toLowerCase());
   const families = new Set<
     HarmonyApplicationProjectionResult["runtime_families"][number]
@@ -200,8 +203,7 @@ const runtimeFamilies = (all: readonly Component[]) => {
   if (paths.some((path) => path.endsWith(".abc") || path.endsWith(".pa")))
     families.add("ark");
   if (all.some(({ format }) => format === "elf")) families.add("native");
-  if (paths.some((path) => /\.(?:m?js|cjs)$/.test(path)))
-    families.add("javascript");
+  if (javascript.length > 0) families.add("javascript");
   for (const { path } of all) {
     const convention = nativeRuntimeConvention(path);
     if (convention !== null) families.add(convention);
