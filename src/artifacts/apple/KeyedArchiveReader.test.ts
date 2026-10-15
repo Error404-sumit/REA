@@ -158,6 +158,32 @@ describe("inert keyed archive decoding", () => {
   });
 });
 
+describe("XML real decoding", () => {
+  it.each([
+    ["plain text", "<real>1.25</real>"],
+    ["mixed text and CDATA", "<real>1<![CDATA[.25]]></real>"],
+    ["CDATA", "<real><![CDATA[1.25]]></real>"],
+  ])("decodes an XML real from %s", (_name, real) => {
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>$archiver</key><string>NSKeyedArchiver</string>
+  <key>$version</key><integer>100000</integer>
+  <key>$objects</key><array><string>$null</string>${real}</array>
+  <key>$top</key><dict><key>root</key><dict><key>CF$UID</key><integer>1</integer></dict></dict>
+</dict>
+</plist>`;
+    const graph = decodeKeyedArchiveBytes(Buffer.from(xml), {
+      offset: 1,
+      limit: 1,
+    });
+    expect(graph.objects[0]?.value).toBe(1.25);
+    expect(graph.limitations).not.toContainEqual(
+      expect.stringContaining("non-finite real"),
+    );
+  });
+});
+
 /** Encode a bplist00 whose objects reference each other by index. */
 const binaryPlist = (objects: readonly Buffer[]): Buffer => {
   const header = Buffer.from("bplist00");

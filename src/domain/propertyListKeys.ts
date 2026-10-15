@@ -83,6 +83,56 @@ export const decodeXmlText = (text: string): string =>
     },
   );
 
+/** Present real CDATA as text because plist 5.0.0 ignores it for real values. */
+export const normalizeXmlPlistRealCdata = (text: string): string => {
+  const normalized = normalizeLineEndings(text);
+  if (!normalized.includes("<![CDATA[")) return normalized;
+  const document = new DOMParser().parseFromString(normalized, "text/xml");
+  const nodes = Array.from(document.getElementsByTagName("real")).flatMap(
+    (real) =>
+      Array.from(real.childNodes).filter(
+        (node) => node.nodeType === node.CDATA_SECTION_NODE,
+      ),
+  );
+  if (nodes.length === 0) return normalized;
+
+  let line = 1;
+  let lineStart = 0;
+  const parts: string[] = [];
+  let cursor = 0;
+  for (const node of nodes) {
+    const nodeLine = node.lineNumber;
+    const column = node.columnNumber;
+    if (nodeLine === undefined || column === undefined)
+      throw new TypeError("XML plist real CDATA has no source location");
+    while (line < nodeLine) {
+      const newline = normalized.indexOf("\n", lineStart);
+      if (newline === -1)
+        throw new TypeError(
+          "XML plist real CDATA has an invalid source location",
+        );
+      lineStart = newline + 1;
+      line += 1;
+    }
+    const offset = lineStart + column - 1;
+    const end = normalized.indexOf("]]>", offset + 9);
+    if (!normalized.startsWith("<![CDATA[", offset) || end === -1)
+      throw new TypeError(
+        "XML plist real CDATA has an invalid source location",
+      );
+    const value = node.nodeValue ?? "";
+    parts.push(
+      normalized.slice(cursor, offset),
+      value.length === 0
+        ? "&#32;"
+        : value.replaceAll("&", "&amp;").replaceAll("<", "&lt;"),
+    );
+    cursor = end + 3;
+  }
+  parts.push(normalized.slice(cursor));
+  return parts.join("");
+};
+
 /**
  * Decode an XML plist whose dictionaries may use the legal key `__proto__`,
  * which the `plist` decoder rejects outright. Those entries are omitted and
@@ -101,7 +151,7 @@ export const parseXmlPropertyList = (
   // Normalize only the literal line endings the pinned decoder normalizes.
   // Preserve character references in the source: serializing a DOM would turn
   // e.g. an encoded carriage return into a literal newline on the second parse.
-  const normalized = normalizeLineEndings(text);
+  const normalized = normalizeXmlPlistRealCdata(text);
   // The pinned XML parser is iterative. Reuse its document for the depth
   // preflight and key lookup so quoted attributes and declarations have the
   // same meaning at both boundaries, before plist's recursive value decode.

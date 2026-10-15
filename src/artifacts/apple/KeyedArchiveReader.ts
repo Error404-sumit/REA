@@ -16,6 +16,7 @@ import {
   xmlPlistNumberLiterals,
 } from "./PlistNumberLiterals.js";
 import {
+  normalizeXmlPlistRealCdata,
   omittedPrototypeKeysLimitation,
   parseXmlPropertyList,
 } from "../../domain/propertyListKeys.js";
@@ -53,7 +54,9 @@ export const decodeKeyedArchiveBytes = (
       "nib-archive",
     );
   const binary = hasBinaryPlistSignature(bytes);
-  const xmlText = binary ? undefined : decodeXmlPlistText(bytes);
+  const xmlText = binary
+    ? undefined
+    : normalizeXmlPlistRealCdata(decodeXmlPlistText(bytes));
   // plist.parseBinary recurses on every object reference and copies shared
   // containers, so a few hundred bytes can exhaust memory or the stack.
   // RangeError reports a resource limit; a reference cycle is malformed.
