@@ -148,7 +148,8 @@ export const inspectManagedNativeBoundariesBytes = (
   }
   try {
     const heapExtent = Math.max(layout.strings.size, layout.blob.size);
-    issues.push(...inventory.issues);
+    // Not call arguments: a hostile table can yield more issues than the stack admits.
+    for (const issue of inventory.issues) issues.push(issue);
     const moduleRefs = parseModuleRefs(bytes, layout, heapExtent, issues);
     const members = new Map([
       ...parseFields(bytes, layout, heapExtent, issues),
