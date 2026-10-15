@@ -47,6 +47,7 @@ interface ReferenceSourceImportRelationship {
   readonly kind: ReferenceSourceImportKind;
   readonly resolution: ReferenceSourceImportResolution;
   readonly parse_state: ReferenceSourceImportParseState;
+  readonly resolutionStrategy?: "typescript-source";
 }
 
 interface ReferenceSourceParseFailure {
@@ -114,6 +115,7 @@ const appendRelationship = (
     readonly kind: ReferenceSourceImportKind;
     readonly parseState: ReferenceSourceImportParseState;
     readonly resolution?: ReferenceSourceImportResolution;
+    readonly resolutionStrategy?: "typescript-source";
   },
 ): void => {
   if (input.to === undefined) return;
@@ -123,6 +125,9 @@ const appendRelationship = (
     kind: input.kind,
     resolution: input.resolution ?? resolveSpecifier(input.to),
     parse_state: input.parseState,
+    ...(input.resolutionStrategy === undefined
+      ? {}
+      : { resolutionStrategy: input.resolutionStrategy }),
   });
 };
 
@@ -172,6 +177,7 @@ const extractImportDeclarations = (
           to: safeModuleName(reference.expression),
           kind: "requires",
           parseState: "parsed",
+          resolutionStrategy: "typescript-source",
         });
       }
       continue;

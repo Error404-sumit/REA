@@ -28,6 +28,11 @@ import {
 } from "../TypeScriptEmittedSourceCandidates.js";
 import { isRelativeJavaScriptModuleSpecifier } from "../../domain/javascript/javascriptModuleSpecifier.js";
 import type { JavaScriptModuleResolutionMode } from "../../domain/javascript/javascriptModuleResolutionMode.js";
+import {
+  NODE_PACKAGE_MAIN_SUFFIXES,
+  nodeModuleFileCandidates,
+  nodeModuleIndexCandidates,
+} from "../../domain/javascript/nodeModulePathCandidates.js";
 import type { JsonValue } from "../../domain/jsonValue.js";
 import { err, ok, type Result } from "../../domain/result.js";
 
@@ -1507,30 +1512,21 @@ const isRuntimeDeclarationPath = (
 ): boolean =>
   input.moduleKind !== undefined && /\.d\.(?:ts|mts|cts)$/iu.test(path);
 
-const NODE_MODULE_EXTENSIONS = [".js", ".json", ".node"] as const;
-const NODE_PACKAGE_MAIN_SUFFIXES = [
-  "",
-  ...NODE_MODULE_EXTENSIONS,
-  ...NODE_MODULE_EXTENSIONS.map((extension) => `/index${extension}`),
-];
-
 const fileCandidates = (
   candidate: string,
   moduleKind?: ResolveArtifactPathInput["moduleKind"],
-): readonly string[] => [
-  candidate,
-  ...(moduleKind === undefined ? EXTENSIONS : NODE_MODULE_EXTENSIONS).map(
-    (extension) => `${candidate}${extension}`,
-  ),
-];
+): readonly string[] =>
+  moduleKind === undefined
+    ? [candidate, ...EXTENSIONS.map((extension) => `${candidate}${extension}`)]
+    : nodeModuleFileCandidates(candidate);
 
 const indexCandidates = (
   candidate: string,
   moduleKind?: ResolveArtifactPathInput["moduleKind"],
 ): readonly string[] =>
-  (moduleKind === undefined ? EXTENSIONS : NODE_MODULE_EXTENSIONS).map(
-    (extension) => posix.join(candidate, `index${extension}`),
-  );
+  moduleKind === undefined
+    ? EXTENSIONS.map((extension) => posix.join(candidate, `index${extension}`))
+    : nodeModuleIndexCandidates(candidate);
 
 type PackageTargetBlockCause = "null" | "empty-array";
 

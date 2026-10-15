@@ -11,6 +11,11 @@ import {
   classifyReferenceSourcePath,
   detectReferenceSourceLanguage,
 } from "../domain/referenceSourceClassification.js";
+import {
+  NODE_MODULE_EXTENSIONS,
+  nodeModuleFileCandidates,
+  nodeModuleIndexCandidates,
+} from "../domain/javascript/nodeModulePathCandidates.js";
 import type { HistoricalSourceGraphInput } from "../domain/referenceSourceGraph.js";
 import {
   parseReferenceSourceImports,
@@ -137,7 +142,70 @@ const readPackageMains = (
   return mains;
 };
 
-const RESOLUTION_SUFFIXES = ["", ".ts", ".js", ".mjs", ".cjs", ".tsx", ".jsx"];
+const SOURCE_RESOLUTION_SUFFIXES = [
+  "",
+  ".ts",
+  ".js",
+  ".mjs",
+  ".cjs",
+  ".tsx",
+  ".jsx",
+];
+
+const TYPESCRIPT_SOURCE_RESOLUTION_SUFFIXES = [
+  "",
+  ".ts",
+  ".tsx",
+  ".mts",
+  ".cts",
+  ".d.ts",
+  ".js",
+  ".jsx",
+];
+
+const NODE_RUNTIME_FALLBACK_EXTENSIONS = NODE_MODULE_EXTENSIONS.filter(
+  (extension) => extension !== ".js",
+);
+
+type InternalSpecifierResolutionMode =
+  | "source"
+  | "typescript-source"
+  | "node-require";
+
+const resolutionSuffixes = (
+  mode: InternalSpecifierResolutionMode,
+): readonly string[] =>
+  mode === "typescript-source"
+    ? TYPESCRIPT_SOURCE_RESOLUTION_SUFFIXES
+    : SOURCE_RESOLUTION_SUFFIXES;
+
+const fileCandidates = (
+  candidate: string,
+  mode: InternalSpecifierResolutionMode,
+): readonly string[] =>
+  mode === "node-require"
+    ? nodeModuleFileCandidates(candidate)
+    : resolutionSuffixes(mode).map((suffix) => `${candidate}${suffix}`);
+
+const indexCandidates = (
+  directory: string,
+  mode: InternalSpecifierResolutionMode,
+): readonly string[] =>
+  mode === "node-require"
+    ? nodeModuleIndexCandidates(directory)
+    : resolutionSuffixes(mode)
+        .filter((suffix) => suffix !== "")
+        .map((suffix) => posix.join(directory, `index${suffix}`));
+
+const nodeRuntimeFallbackFileCandidates = (candidate: string): string[] =>
+  NODE_RUNTIME_FALLBACK_EXTENSIONS.map(
+    (extension) => `${candidate}${extension}`,
+  );
+
+const nodeRuntimeFallbackIndexCandidates = (directory: string): string[] =>
+  NODE_RUNTIME_FALLBACK_EXTENSIONS.map((extension) =>
+    posix.join(directory, `index${extension}`),
+  );
 
 /** Inventory facts an internal specifier resolves against. */
 interface SpecifierContext {
@@ -146,13 +214,13 @@ interface SpecifierContext {
 }
 
 /**
- * Apply a package `main` to a directory resolved through its index. Node loads
- * the declared entry as a file, then as a directory index, and falls back to
- * the package's own index only when neither exists.
+ * Apply a package `main` to an index match with the importing edge's resolution
+ * strategy, then fall back to the package's index when no main target is found.
  */
 const selectPackageMain = (
   index: string,
   context: SpecifierContext,
+  resolutionMode: InternalSpecifierResolutionMode,
 ): { to: string; resolution: "internal" | "unresolved" } => {
   const directory = posix.dirname(index);
   const manifest = context.packageMains.get(directory);
@@ -170,18 +238,33 @@ const selectPackageMain = (
   // Node would load a declared entry outside the imported root.
   if (logicalPathEscapesRoot(target))
     return { to: target, resolution: "unresolved" };
-  const selected = context.lookupPath.resolveCandidates([
-    ...RESOLUTION_SUFFIXES.map((suffix) => `${target}${suffix}`),
-    ...RESOLUTION_SUFFIXES.filter((suffix) => suffix !== "").map((suffix) =>
-      posix.join(target, `index${suffix}`),
-    ),
-  ]);
+  const mainCandidates =
+    resolutionMode === "node-require"
+      ? [
+          ...nodeModuleFileCandidates(target),
+          ...nodeModuleIndexCandidates(target),
+        ]
+      : resolutionMode === "typescript-source"
+        ? [
+            ...fileCandidates(target, resolutionMode),
+            ...nodeRuntimeFallbackFileCandidates(target),
+            ...indexCandidates(target, resolutionMode),
+            ...nodeRuntimeFallbackIndexCandidates(target),
+          ]
+        : [
+            ...nodeModuleFileCandidates(target),
+            ...fileCandidates(target, resolutionMode),
+            ...nodeModuleIndexCandidates(target),
+            ...indexCandidates(target, resolutionMode),
+          ];
+  const selected = context.lookupPath.resolveCandidates(mainCandidates);
   return { to: selected ?? index, resolution: "internal" };
 };
 
 const resolveInternalSpecifier = (
   fromPath: string,
   specifier: string,
+  resolutionMode: InternalSpecifierResolutionMode,
   context: SpecifierContext,
 ): { to: string; resolution: "internal" | "unresolved" } => {
   if (posix.isAbsolute(specifier))
@@ -195,11 +278,13 @@ const resolveInternalSpecifier = (
   const directoryReference =
     specifier.endsWith("/") || [".", ".."].includes(posix.basename(specifier));
   // A directory resolves only to an index with an extension; neither Node nor
-  // TypeScript selects an extensionless `index` file.
-  const candidates = RESOLUTION_SUFFIXES.flatMap((suffix) => [
-    ...(directoryReference ? [] : [`${normalized}${suffix}`]),
-    ...(suffix === "" ? [] : [posix.join(normalized, `index${suffix}`)]),
-  ]);
+  // TypeScript selects an extensionless `index` file. CommonJS `require` only
+  // probes Node's runtime file extensions; source-only suffixes must not outrank
+  // a directory index or make a sibling .cjs file an implicit require target.
+  const candidates = [
+    ...(directoryReference ? [] : fileCandidates(normalized, resolutionMode)),
+    ...indexCandidates(normalized, resolutionMode),
+  ];
   // Retain present runtime files first; substitute only a missing counterpart.
   // Counterparts cover explicit filenames, not directory/index resolution.
   if (!directoryReference)
@@ -214,7 +299,7 @@ const resolveInternalSpecifier = (
     posix.basename(match).startsWith("index.") &&
     posix.dirname(match).normalize("NFC") === normalized.normalize("NFC");
   return resolvedThroughIndex
-    ? selectPackageMain(match, context)
+    ? selectPackageMain(match, context, resolutionMode)
     : { to: match, resolution: "internal" };
 };
 
@@ -242,17 +327,25 @@ const appendFile = (
   });
   if (parsed === undefined) return;
   for (const relationship of parsed.relationships) {
-    if (relationship.resolution !== "internal") {
-      output.relationships.push(relationship);
+    const { resolutionStrategy, ...graphRelationship } = relationship;
+    if (graphRelationship.resolution !== "internal") {
+      output.relationships.push(graphRelationship);
       continue;
     }
+    const resolutionMode =
+      graphRelationship.kind !== "requires"
+        ? "source"
+        : resolutionStrategy === "typescript-source"
+          ? "typescript-source"
+          : "node-require";
     const resolved = resolveInternalSpecifier(
-      relationship.from_path,
-      relationship.to,
+      graphRelationship.from_path,
+      graphRelationship.to,
+      resolutionMode,
       context,
     );
     output.relationships.push({
-      ...relationship,
+      ...graphRelationship,
       to: resolved.to,
       resolution: resolved.resolution,
     });
