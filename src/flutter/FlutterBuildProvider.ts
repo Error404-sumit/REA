@@ -23,6 +23,7 @@ import {
   AnalysisUnsupportedTargetError,
 } from "../domain/analysisErrorCore.js";
 import { AnalysisProtocolError } from "../domain/analysisErrorCore.js";
+import { ZIP_METADATA_READ_MAX_BYTES } from "../domain/zipArtifactBudget.js";
 import { compareUnicodeCodePoints } from "../domain/unicodeCodePointOrder.js";
 import { AnalysisError } from "../domain/analysisErrorBase.js";
 import { err, ok, type Result } from "../domain/result.js";
@@ -58,7 +59,6 @@ export const FLUTTER_PROVIDER_IDENTITY = {
   version: null,
 } as const;
 
-const APK_METADATA_READ_MAX_BYTES = 8 * 1024 * 1024;
 const LIBRARY_MAX_BYTES = 256 * 1024 * 1024;
 /** Cumulative cap across every library entry in one identification. */
 const TOTAL_EXTRACTION_MAX_BYTES = 768 * 1024 * 1024;
@@ -179,7 +179,7 @@ const mapInputFailure = (
       operation,
       "memory",
       cause.message,
-      { max_metadata_read_bytes: APK_METADATA_READ_MAX_BYTES },
+      { max_metadata_read_bytes: ZIP_METADATA_READ_MAX_BYTES },
       { cause },
     );
   return new AnalysisInputError(operation, { cause }, [
@@ -466,7 +466,7 @@ export class FlutterBuildProvider {
   private readerFor(snapshot: OwnedSnapshot): ZipArtifactReader {
     return this.ownResource(
       snapshot.root,
-      new ZipArtifactReader(snapshot.path, "apk", APK_METADATA_READ_MAX_BYTES),
+      new ZipArtifactReader(snapshot.path, "apk", ZIP_METADATA_READ_MAX_BYTES),
     );
   }
 

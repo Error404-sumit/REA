@@ -649,16 +649,21 @@ allows 30 seconds for an authenticated cleanup reconnect, then releases Hopper's
 Python execution thread. Expiry does not establish document closure, so REA
 retains unconfirmed ownership. Retry close while the bridge remains available.
 
-If a Linux launcher exists but cannot start, inspect its shared libraries:
+If a Linux launcher exists but cannot start, inspect its declared ELF
+dependencies without executing it:
 
 ```bash
-ldd /absolute/path/to/Hopper | grep 'not found'
+objdump -p /absolute/path/to/Hopper | grep NEEDED
 ```
 
-Install the missing packages and rerun the scoped check. Linux demo sessions
-need Xvfb, Python 3, X11 and XTEST; approved setup installs those dependencies
-on supported distributions. Add the curl installer's reported executable
-directory, commonly `~/.local/bin`, to your shell `PATH` if needed.
+This lists direct dependencies only; it does not resolve the full dependency
+tree. Do not use `ldd` on a launcher whose provenance is not trusted, because
+some implementations may execute its ELF interpreter or code. Use your
+distribution's package documentation to identify missing packages, then rerun
+the scoped check. Linux demo sessions need Xvfb, Python 3, X11 and XTEST;
+approved setup installs those dependencies on supported distributions. Add
+the curl installer's reported executable directory, commonly `~/.local/bin`,
+to your shell `PATH` if needed.
 
 REA starts Hopper when needed. On macOS, complete its demo or license prompt in
 the same user session before the first CLI/MCP operation or unattended job. Open

@@ -3,7 +3,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { execFileBoundedOutput } from "../process/ExecFileBoundedOutput.js";
-import { execFileOutput } from "../process/ExecFileOutput.js";
 import { downloadHopperPackage } from "./HopperDownload.js";
 import { hashStableFile } from "../filesystem/StableFileHash.js";
 import { err, type Result } from "../domain/result.js";
@@ -425,13 +424,8 @@ export const systemLinuxHopperInstallHost = (
     async launcherStatus(path, expectedSha256) {
       try {
         await access(path);
-        const linked = await execFileOutput("ldd", [path], {
-          env: environment,
-        });
-        if (
-          !linuxSharedLibrariesAvailable(`${linked.stdout}\n${linked.stderr}`)
-        )
-          return "runtime_dependencies";
+        // Never run ldd on the launcher: the publisher-verified digest
+        // decides support without invoking the binary's dynamic loader.
         return (await hashStableFile(path)).sha256 === expectedSha256
           ? "ready"
           : "unsupported_hopper_build";
@@ -484,10 +478,6 @@ export const inspectLinuxHopperLauncher = async (
     );
   }
 };
-
-/** Interpret ldd output conservatively so a present but broken launcher is unhealthy. */
-export const linuxSharedLibrariesAvailable = (output: string): boolean =>
-  !/(?:=>\s+not found|error while loading shared libraries)/iu.test(output);
 
 const installSystemPackage = async (
   family: LinuxPackageFamily,

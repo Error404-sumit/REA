@@ -1,4 +1,4 @@
-import { access, chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, writeFile } from "node:fs/promises";
 import { delimiter, join } from "node:path";
 
 import { expect } from "vitest";
@@ -88,6 +88,8 @@ cliTest.skipIf(!["darwin", "linux"].includes(process.platform))(
       code: "ENOENT",
     });
     if (process.platform === "linux")
-      expect(await readFile(loaderMarker, "utf8")).toBe(launcher);
+      await expect(access(loaderMarker)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
   },
 );

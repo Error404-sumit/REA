@@ -20,7 +20,6 @@ import {
 } from "./MacHopperPaths.js";
 import {
   inspectLinuxHopperLauncher,
-  linuxSharedLibrariesAvailable,
   readLinuxDistribution,
   type LinuxDistribution,
 } from "./LinuxHopper.js";
@@ -508,13 +507,7 @@ export const systemDoctorHost = (
         remediation: analysisErrorRemediationAction(error),
       };
     },
-    executable: (path) =>
-      executableAvailable(
-        path,
-        platform,
-        hostExecFileOutput,
-        commandEnvironment,
-      ),
+    executable: executableAvailable,
     linuxDemoRuntimeCheck:
       options.linuxDemoRuntimeCheck ?? uncomposedLinuxDemoRuntimeCheck,
     inspectLinuxHopper: (path) => inspectLinuxHopperLauncher(path, environment),
@@ -634,18 +627,10 @@ const readMacosVersion = async (
   }
 };
 
-const executableAvailable = async (
-  path: string,
-  platform: NodeJS.Platform,
-  run: typeof execFileOutput,
-  options: { readonly env: NodeJS.ProcessEnv },
-): Promise<boolean> => {
+const executableAvailable = async (path: string): Promise<boolean> => {
   try {
     await access(path, constants.X_OK);
-    if (!(await stat(path)).isFile()) return false;
-    if (platform !== "linux") return true;
-    const linked = await run("ldd", [path], options);
-    return linuxSharedLibrariesAvailable(`${linked.stdout}\n${linked.stderr}`);
+    return (await stat(path)).isFile();
   } catch (cause: unknown) {
     // best-effort cleanup: optional executable probing; failure means unavailable.
     void cause;

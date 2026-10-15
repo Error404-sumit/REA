@@ -21,6 +21,7 @@ import {
   ERR_UNSUPPORTED_ENCRYPTION,
   ERR_UNSUPPORTED_UINT64,
   Reader,
+  WARNING_TRAILING_CENTRAL_DIRECTORY_DATA,
   ZipReader,
   type Entry,
   type FileEntry,
@@ -34,6 +35,11 @@ import {
   type ArtifactReader,
 } from "./ArtifactReader.js";
 import type { ZipPackageFormat } from "../domain/zipPackageFormat.js";
+import {
+  ZIP_MAX_ENTRIES_PER_TRAVERSAL,
+  ZIP_METADATA_READ_MAX_BYTES,
+  type ZipArtifactEntryLimit,
+} from "../domain/zipArtifactBudget.js";
 import {
   ARTIFACT_DECOMPRESSION_RATIO,
   artifactDecompressionBudgetBytes,
@@ -159,15 +165,22 @@ export class ZipArtifactReader implements ArtifactReader {
     string,
     { readonly source: Entry; readonly metadata: ArtifactEntry }
   >();
-  /** Optionally bound each metadata read before allocating its backing buffer. */
+  readonly #maximumEntries: ZipArtifactEntryLimit;
+  /** Bound each metadata read and retained entry identity before allocation. */
   constructor(
     path: string,
     format: ZipPackageFormat,
-    maximumMetadataReadBytes?: number,
+    maximumMetadataReadBytes = ZIP_METADATA_READ_MAX_BYTES,
     admitted?: StableRegularFileDescriptor,
+    maximumEntries: ZipArtifactEntryLimit = ZIP_MAX_ENTRIES_PER_TRAVERSAL,
   ) {
     this.format = format;
-    this.#source = new NodeFileReader(path, maximumMetadataReadBytes, admitted);
+    this.#maximumEntries = maximumEntries;
+    this.#source = new NodeFileReader(
+      path,
+      Math.min(maximumMetadataReadBytes, ZIP_METADATA_READ_MAX_BYTES),
+      admitted,
+    );
     this.#reader = new ZipReader(this.#source, {
       checkSignature: true,
       checkOverlappingEntry: true,
@@ -181,12 +194,32 @@ export class ZipArtifactReader implements ArtifactReader {
   }
 
   async *entries(signal?: AbortSignal): AsyncIterable<ArtifactEntry> {
-    let index = 0;
-    // A traversal owns its accounting, including overlapping or repeated passes.
-    let declaredFileBytes = 0;
+    const sourceEntries: Entry[] = [];
     for await (const entry of typedZipFailures(
       this.#reader.getEntriesGenerator({ decodeText: decodeZipEntryText }),
     )) {
+      abortIfNeeded(signal);
+      if (sourceEntries.length >= this.#maximumEntries)
+        throw new ArtifactReaderFailure(
+          "limit",
+          `ZIP traversal exceeds its ${String(this.#maximumEntries)}-entry limit; refusing to produce incomplete output`,
+        );
+      sourceEntries.push(entry);
+    }
+    if (
+      this.#reader.warnings?.some(
+        ({ reason }) => reason === WARNING_TRAILING_CENTRAL_DIRECTORY_DATA,
+      )
+    )
+      throw new ArtifactReaderFailure(
+        "integrity",
+        "ZIP central directory contains records not accounted for by its declared entry count",
+      );
+
+    let index = 0;
+    // A traversal owns its accounting, including overlapping or repeated passes.
+    let declaredFileBytes = 0;
+    for (const entry of sourceEntries) {
       abortIfNeeded(signal);
       // ZIP member identity is its directory occurrence, not its filename.
       // Logical path uniqueness belongs to the artifact inventory boundary.

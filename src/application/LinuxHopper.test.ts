@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
   formatCommandForDisplay,
   installLinuxHopper,
   linuxPackageManagerCommands,
-  linuxSharedLibrariesAvailable,
   parseLinuxDistribution,
   supportsReaHost,
   LinuxHopperTemporaryCleanupOwner,
@@ -154,24 +154,6 @@ describe("Linux Hopper host classification", () => {
     },
   );
 
-  it("detects unresolved or loader-reported shared libraries", () => {
-    expect(
-      linuxSharedLibrariesAvailable(
-        "libQt6Network.so.6 => not found\nlibc.so.6 => /lib/libc.so.6",
-      ),
-    ).toBe(false);
-    expect(
-      linuxSharedLibrariesAvailable(
-        "error while loading shared libraries: libQt6Gui.so.6",
-      ),
-    ).toBe(false);
-    expect(
-      linuxSharedLibrariesAvailable(
-        "libQt6Network.so.6 => /usr/lib/libQt6Network.so.6",
-      ),
-    ).toBe(true);
-  });
-
   it.each([
     'ID=ubuntu\nVERSION_ID="22.04"\n',
     "ID=fedora\nVERSION_ID=40\n",
@@ -269,7 +251,7 @@ describe("Linux Hopper package installation", () => {
         launcherPath: "/opt/hopper/bin/Hopper",
       });
       expect(host.installed).toEqual([
-        { family, archive: `/tmp/rea test/hopper.${family}` },
+        { family, archive: join("/tmp/rea test", `hopper.${family}`) },
       ]);
       expect(host.cleaned).toEqual(["/tmp/rea test"]);
     },

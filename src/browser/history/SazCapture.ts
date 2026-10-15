@@ -18,11 +18,7 @@ export const decodeSazCapture = async (
   snapshotPath: string,
   sensitiveValues: readonly string[],
 ) => {
-  const reader = new ZipArtifactReader(
-    snapshotPath,
-    "zip",
-    WEB_NETWORK_CAPTURE_LIMITS.inputBytes,
-  );
+  const reader = new ZipArtifactReader(snapshotPath, "zip");
   try {
     const groups = new Map<string, ArtifactEntry[]>();
     const inventory: SazValue[] = [];

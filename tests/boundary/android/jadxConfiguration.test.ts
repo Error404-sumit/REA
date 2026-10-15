@@ -8,9 +8,16 @@ import {
   resolveJadxConfigurationInputs,
   validateJadxConfiguration,
 } from "../../../src/android/JadxConfiguration.js";
+import { JADX_RELEASE } from "../../../src/android/JadxRelease.js";
 import { AnalysisCapabilityUnavailableError } from "../../../src/domain/analysisErrorCore.js";
+import {
+  ZIP_MAX_ENTRIES_PER_ENGINE_ARCHIVE,
+  ZIP_MAX_ENTRIES_PER_TRAVERSAL,
+  ZIP_METADATA_READ_MAX_BYTES,
+} from "../../../src/domain/zipArtifactBudget.js";
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 import { writeOrderedZip } from "../../fixtures/artifactEntryOrder.js";
+import { PINNED_JADX_ARCHIVE_DIRECTORY } from "../../fixtures/android/jadxArchiveMetadata.js";
 import { writeJadxJarInventory } from "../../fixtures/android/jadxJar.js";
 
 const it = test.skipIf(process.platform === "win32");
@@ -84,6 +91,37 @@ it("accepts a full JDK and canonicalizes the selected JAR", async () => {
     java: join(javaHome, "bin", "java"),
     jvmArguments: [],
   });
+});
+
+it("admits the pinned JADX directory scale within its bounded archive budget", async () => {
+  expect(PINNED_JADX_ARCHIVE_DIRECTORY.version).toBe(JADX_RELEASE.version);
+  expect(PINNED_JADX_ARCHIVE_DIRECTORY.sha256).toBe(JADX_RELEASE.sha256);
+  expect(PINNED_JADX_ARCHIVE_DIRECTORY.entryCount).toBeGreaterThan(
+    ZIP_MAX_ENTRIES_PER_TRAVERSAL,
+  );
+  expect(PINNED_JADX_ARCHIVE_DIRECTORY.entryCount).toBeLessThanOrEqual(
+    ZIP_MAX_ENTRIES_PER_ENGINE_ARCHIVE,
+  );
+  expect(
+    PINNED_JADX_ARCHIVE_DIRECTORY.centralDirectoryBytes,
+  ).toBeLessThanOrEqual(ZIP_METADATA_READ_MAX_BYTES);
+
+  const root = await createTestTempDirectory("rea-jadx-large-directory-");
+  const jar = join(root, "jadx-headless-mcp.jar");
+  const javaHome = await createFakeJdk(root);
+  const paddingCount = PINNED_JADX_ARCHIVE_DIRECTORY.entryCount - 5;
+  const paddingEntries = Array.from(
+    { length: paddingCount },
+    (_unused, index) => `META-INF/padding/${index.toString(36)}.class`,
+  );
+  await writeJadxJarInventory(jar, paddingEntries);
+
+  await expect(
+    resolveConfiguration(
+      { REA_JADX_MCP_JAR: jar, JAVA_HOME: javaHome },
+      "inspect_android_package",
+    ),
+  ).resolves.toMatchObject({ jar: await realpath(jar) });
 });
 
 it("admits engine classes past repeated ZIP resource filenames", async () => {

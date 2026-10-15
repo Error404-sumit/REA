@@ -55,14 +55,25 @@ it("threads the selected host and environment into system diagnostics", async ()
   await host.macosVersion();
   await host.executable(process.execPath);
 
-  expect(calls.map(({ command }) => command)).toEqual([
-    "which",
-    "sw_vers",
-    "ldd",
-  ]);
+  expect(calls.map(({ command }) => command)).toEqual(["which", "sw_vers"]);
   expect(
     calls.every(({ environment: observed }) => observed === environment),
   ).toBe(true);
+});
+
+it("checks Linux executable presence without passing it to ldd", async () => {
+  const calls: string[] = [];
+  const host = systemDoctorHost({
+    platform: "linux",
+    environment: {},
+    execFileOutput: async (command) => {
+      calls.push(command);
+      throw new Error(`Unexpected diagnostic command: ${command}`);
+    },
+  });
+
+  await expect(host.executable(process.execPath)).resolves.toBe(true);
+  expect(calls).toEqual([]);
 });
 
 it("does not report a directory as an available executable", async () => {
