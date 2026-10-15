@@ -51,6 +51,39 @@ it.skipIf(process.platform === "win32")(
 );
 
 it.skipIf(process.platform === "win32")(
+  "preserves trailing whitespace whether the marker shares a frame with the output or not",
+  async () => {
+    const run = async (framing: "coalesced" | "framed"): Promise<string> => {
+      const injected = createInjectedProcess({
+        onWrite: (text, control) => {
+          const marker = /!echo (.+)\n/u.exec(text)?.[1];
+          if (marker === undefined) return;
+          setImmediate(() => {
+            if (framing === "coalesced")
+              control.output(`value  \n${marker}\n\0`);
+            else control.output(`value  \n\0${marker}\n\0`);
+          });
+        },
+      });
+      const { manager, started } = await startInjected(injected.spawnProcess, {
+        frameTimeoutMs: 1000,
+      });
+      expect(started.ok).toBe(true);
+      if (!started.ok) return "";
+      const result = await manager.execute(started.value.session_id, "pad");
+      expect(result.ok).toBe(true);
+      if (!result.ok) return "";
+      expect(result.value.result.completion_status).toBe("complete");
+      return result.value.result.output;
+    };
+
+    const framed = await run("framed");
+    expect(framed).toBe("value  \n");
+    expect(await run("coalesced")).toBe(framed);
+  },
+);
+
+it.skipIf(process.platform === "win32")(
   "discards an oversized frame split across deterministic stream chunks",
   async () => {
     const injected = createInjectedProcess({
