@@ -10,6 +10,7 @@ import {
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import type { Readable } from "node:stream";
 import { OwnedFileHandle } from "../filesystem/OwnedFileHandle.js";
+import { isPathWithinRoot } from "../domain/localPath.js";
 import { streamChunkToBuffer } from "./StreamBytes.js";
 
 import {
@@ -86,6 +87,7 @@ export class SafeOutputTree {
   static async create(
     outputRoot: string,
     platform: NodeJS.Platform = process.platform,
+    protectedRoot?: string,
   ): Promise<SafeOutputTree> {
     if (!isAbsolute(outputRoot))
       throw new ArtifactReaderFailure(
@@ -106,6 +108,16 @@ export class SafeOutputTree {
       },
     );
     const canonicalOutput = join(parent, name);
+    // Extraction must not create output inside the source it is enumerating.
+    // Compare the resolved destination parent so a symlink cannot hide this.
+    if (
+      protectedRoot !== undefined &&
+      isPathWithinRoot(protectedRoot, canonicalOutput)
+    )
+      throw new ArtifactReaderFailure(
+        "path",
+        "Extraction output root must be outside the source directory",
+      );
     await mkdir(canonicalOutput, { mode: 0o700 }).catch((cause: unknown) => {
       if (isAlreadyExists(cause))
         throw new ArtifactReaderFailure(

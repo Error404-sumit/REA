@@ -1,5 +1,7 @@
 import { z } from "incur";
 
+import { artifactExtractionInputSchema } from "../contracts/artifactToolContracts.js";
+
 import type { DirectAnalysis } from "../composition/directAnalysis.js";
 import { createArtifactExtractionDestination } from "../application/artifacts/ArtifactExtractionDestination.js";
 import { logCliCommand } from "../cliLogging.js";
@@ -191,11 +193,15 @@ const registerExtractionCommand = (
   runProviderAnalysis: DirectAnalysis["runProviderAnalysis"],
 ): void => {
   cli.command(CLI_COMMANDS.extractArtifact, {
-    description: "Extract all regular artifact contents safely",
+    description: "Extract all or selected regular artifact contents safely",
     args: z.object({
       path: z.string().describe("Application or package path"),
     }),
     options: z.object({
+      outputRoot: artifactExtractionInputSchema.shape.output_root,
+      occurrenceId: artifactExtractionInputSchema.shape.occurrence_ids.describe(
+        "Inventory occurrence ID to extract (repeatable); omit to extract all regular entries",
+      ),
       integrityPolicy: z
         .enum(["fail", "record-and-continue"])
         .default("fail")
@@ -208,7 +214,12 @@ const registerExtractionCommand = (
           "extract_artifact",
           {
             integrity_policy: options.integrityPolicy,
-            output_root: createArtifactExtractionDestination(),
+            output_root: createArtifactExtractionDestination(
+              options.outputRoot,
+            ),
+            ...(options.occurrenceId === undefined
+              ? {}
+              : { occurrence_ids: options.occurrenceId }),
           },
           logger,
         ),

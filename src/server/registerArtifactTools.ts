@@ -3,6 +3,7 @@ import type { EvidenceMcpServer } from "./EvidenceMcpServer.js";
 import {
   ARTIFACT_TOOL_CONTRACTS,
   artifactInspectionInputSchema,
+  artifactExtractionInputSchema,
 } from "../contracts/artifactToolContracts.js";
 import { createArtifactExtractionDestination } from "../application/artifacts/ArtifactExtractionDestination.js";
 import { registerEvidenceTools } from "./registerEvidenceTools.js";
@@ -37,9 +38,19 @@ export const registerArtifactTools = (
           artifactInspectionInputSchema.parse(parameters);
         return execution;
       }
-      return operation === "extract_artifact"
-        ? { ...parameters, output_root: createArtifactExtractionDestination() }
-        : decodeWithoutDelivery(operation, parameters);
+      if (operation === "extract_artifact") {
+        const execution = artifactExtractionInputSchema.parse(parameters);
+        return {
+          integrity_policy: execution.integrity_policy,
+          output_root: createArtifactExtractionDestination(
+            execution.output_root,
+          ),
+          ...(execution.occurrence_ids === undefined
+            ? {}
+            : { occurrence_ids: execution.occurrence_ids }),
+        };
+      }
+      return decodeWithoutDelivery(operation, parameters);
     },
     parametersForEvidence: decodeWithoutDelivery,
     sourceEvidence: (operation, result) =>

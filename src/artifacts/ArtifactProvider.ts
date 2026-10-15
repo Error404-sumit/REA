@@ -190,6 +190,9 @@ class ArtifactClient implements AnalysisClient {
             inputPath: this.target.sourcePath ?? this.target.path,
             inputFormat: this.target.format,
             outputRoot: parsed.output_root,
+            ...(parsed.occurrence_ids === undefined
+              ? {}
+              : { occurrenceIds: parsed.occurrence_ids }),
             environment: this.environment,
             integrityPolicy: parsed.integrity_policy,
             resourceScope: this.#resourceScope,

@@ -1,4 +1,7 @@
+import { isAbsolute } from "node:path";
 import { z } from "zod";
+
+import { artifactOccurrenceSchema } from "../domain/artifactGraph.js";
 
 import type { ToolContract } from "./toolContractTypes.js";
 import { artifactOutputSchemas } from "./toolOutputSchemaGroups.js";
@@ -27,15 +30,32 @@ export const artifactInspectionInputSchema =
       ),
   });
 
-/** Extraction needs no selector: it materializes every regular child file. */
+/** Omitted selection preserves complete extraction of the active reader. */
 export const artifactExtractionInputSchema = z.strictObject({
   integrity_policy: artifactIntegrityPolicySchema,
+  output_root: localPathStringSchema
+    .refine(isAbsolute, "Extraction output root must be absolute")
+    .exactOptional()
+    .describe(
+      "Absolute destination path on the REA host. It must not exist and its parent must exist. Omit to use a fresh temporary directory. Successful output persists after the call.",
+    ),
+  occurrence_ids: z
+    .array(artifactOccurrenceSchema.shape.occurrence_id)
+    .min(1)
+    .refine(
+      (ids) => new Set(ids).size === ids.length,
+      "Occurrence IDs must be unique",
+    )
+    .exactOptional()
+    .describe(
+      "Exact regular-file or slice occurrence IDs from the current inventory. Omit to extract all regular entries exposed by the active reader. Directories, links, the root and members inside nested archives cannot be selected.",
+    ),
 });
 
-/** Provider input containing the destination chosen by the local adapter. */
+/** Provider input after the adapter has supplied the optional destination. */
 export const artifactExtractionExecutionSchema =
   artifactExtractionInputSchema.extend({
-    output_root: localPathStringSchema,
+    output_root: artifactExtractionInputSchema.shape.output_root.unwrap(),
   });
 
 const exampleInputSchema = z.record(z.string(), jsonValueSchema);
@@ -85,7 +105,7 @@ export const ARTIFACT_TOOL_CONTRACTS = [
   ),
   artifact(
     "extract_artifact",
-    "Extract all regular files from the active archive or application package into a fresh temporary directory chosen by REA. The result includes its location. Rejects traversal and symlink escapes, never overwrites, and verifies cleanup. Integrity mismatches fail by default; record-and-continue extracts the observed bytes and returns each mismatch as an explicitly untrusted integrity contradiction.",
+    "Extract regular files from the active archive or application package. Optionally select exact inventory occurrence_ids and an absent absolute output_root on the REA host; otherwise extract all regular entries into a fresh temporary directory. The result records the selected IDs and output location; successful files persist after the call. Nested archive members require opening their containing archive separately. Rejects traversal and symlink escapes, never overwrites, and verifies cleanup. Inventory integrity checks still cover the full input: mismatches fail by default; record-and-continue keeps extracted contradictions explicitly untrusted.",
     artifactExtractionInputSchema,
   ),
   artifact(
