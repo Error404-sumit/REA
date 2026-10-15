@@ -22,6 +22,7 @@ interface InitializerPositionCache {
   readonly direct: WeakMap<t.Node, StatementPosition | null>;
   readonly mutation: WeakMap<t.Node, StatementPosition | null>;
   readonly reference: WeakMap<t.Node, StatementPosition | null>;
+  readonly effect: WeakMap<t.Node, readonly StatementPosition[] | null>;
 }
 
 const initializerPositionCaches = new WeakMap<
@@ -38,6 +39,7 @@ const initializerPositionCache = (
     direct: new WeakMap(),
     mutation: new WeakMap(),
     reference: new WeakMap(),
+    effect: new WeakMap(),
   };
   initializerPositionCaches.set(parents, created);
   return created;
@@ -79,8 +81,17 @@ export const semanticTopLevelEffectFollowsCapture = (
   effect: t.Node | undefined,
   parents: WeakMap<t.Node, t.Node>,
 ): boolean => {
-  const position = (node: t.Node | undefined): StatementPosition | null => {
-    let selected: StatementPosition | null = null;
+  const positions = (
+    start: t.Node | undefined,
+  ): readonly StatementPosition[] | null => {
+    if (start === undefined) return null;
+    const cache = initializerPositionCache(parents).effect;
+    const cached = cache.get(start);
+    if (cached !== undefined) return cached;
+    // Publish the conservative result for deferred or repeating activations.
+    cache.set(start, null);
+    let node: t.Node | undefined = start;
+    const selected: StatementPosition[] = [];
     let declarator: t.VariableDeclarator | undefined;
     let child: t.Node | undefined;
     while (node !== undefined) {
@@ -94,17 +105,27 @@ export const semanticTopLevelEffectFollowsCapture = (
       )
         return null;
       if (t.isVariableDeclarator(node)) declarator = node;
-      if (selected === null && t.isStatement(node))
-        selected = statementPosition(node, parents, declarator);
-      if (t.isProgram(node)) return selected;
+      if (t.isStatement(node)) {
+        const position = statementPosition(node, parents, declarator);
+        if (position !== null) selected.push(position);
+      }
+      if (t.isProgram(node)) {
+        cache.set(start, selected);
+        return selected;
+      }
       child = node;
       node = parents.get(node);
     }
     return null;
   };
-  const before = position(capture);
-  const after = position(effect);
-  if (before === null || after === null) return false;
+  const earlier = positions(capture);
+  const later = positions(effect);
+  if (earlier === null || later === null) return false;
+  const before = earlier.find((position) =>
+    later.some((other) => position.body === other.body),
+  );
+  const after = later.find((position) => position.body === before?.body);
+  if (before === undefined || after === undefined) return false;
   if (positionPrecedes(before, after)) return true;
   if (
     before.body !== after.body ||

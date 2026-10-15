@@ -80,6 +80,17 @@ it("preserves earlier and sibling effects without inventing replaced cached-modu
     join(root, "global-process.cjs"),
     `process.env={MODE:'local'}; const proc=require('process'); const mode=proc.env.MODE;`,
   );
+  await writeFile(
+    join(root, "ordered-receivers.cjs"),
+    `let fs=require('fs'); fs.statSync('probe'); fs.readdirSync('probe');
+     fs.readFileSync('ordered-kept.json'); fs={};
+     globalThis.process.cwd(); const proc=require('process'); const mode=proc.env.REVIEW_MODE;`,
+  );
+  await writeFile(
+    join(root, "nested-write.cjs"),
+    `const fs=require('fs'); fs.readFileSync('nested-kept.json');
+     if(flag) { fs.readFileSync=custom; } fs.readFileSync('wrong-nested.json');`,
+  );
   const { stdout } = await execute(
     process.execPath,
     ["scripts/rea.mjs", "analyze-javascript-application", root, "--json"],
@@ -95,6 +106,7 @@ it("preserves earlier and sibling effects without inventing replaced cached-modu
       .map(({ properties }) => properties.key)
       .sort(),
   ).toEqual([
+    "REVIEW_MODE",
     "before-write.json",
     "before.json",
     "direct.json",
@@ -102,6 +114,8 @@ it("preserves earlier and sibling effects without inventing replaced cached-modu
     "later.json",
     "loader-after.json",
     "loader-before.json",
+    "nested-kept.json",
+    "ordered-kept.json",
     "replacement-kept.json",
     "saved-destructured.json",
     "saved.json",
@@ -128,6 +142,22 @@ it("preserves earlier and sibling effects without inventing replaced cached-modu
 
 it("excludes monkey-patched CommonJS effects from CLI and MCP evidence", async () => {
   const root = await createTestTempDirectory("rea-builtin-mutated-");
+  for (const [index, mutation] of [
+    "Object.assign(module, {[key]: replacement});",
+    "Object.assign(module, {...replacement});",
+    "Reflect.set(module, 'require', replacement);",
+    "let owner=module; owner.require=replacement; owner={};",
+  ].entries()) {
+    await writeFile(
+      join(root, `loader-${index}.cjs`),
+      `${mutation} require('fs').readFileSync('wrong-loader.json');`,
+    );
+  }
+  await writeFile(
+    join(root, "deleted-parent.cjs"),
+    `const fs=require('fs'); delete fs.promises; require('fs').promises.open('wrong');
+     require('tls').createConnection(443);`,
+  );
   await writeFile(
     join(root, "app.cjs"),
     `
@@ -185,6 +215,8 @@ it("retains CommonJS builtin effects and handle links through CLI and MCP", asyn
     throw new Error("This source must only be parsed, never executed");
     const fs = require("node:fs");
     const {spawn: launch} = require("node:child_process");
+    const cp = require("node:child_process");
+    function syncRun() { return cp.spawnSync("tool", []); }
     const timers = require("timers");
     const {get} = require("http");
     const proc = require("node:process");

@@ -77,6 +77,13 @@ registrations/removals and dispatch, Node timers and cancellation handles, async
 defaults, request construction and response consumers, parse/coercion/
 validation boundaries, and built-in resource acquisition/release.
 
+Node built-in effects follow the selected binding at its read and preserve
+earlier observations across later top-level writes. Shared exports, saved child
+objects and captured methods retain their distinct identities. Recognized native
+filesystem and child-process calls preserve their exports receiver; replaced or
+unknown methods remain conservative. Writes that may replace `module.require`
+invalidate subsequent loader-derived effects, including computed keys and spreads.
+
 Mutation tracking covers explicit member assignments, updates, deletion, and
 loop assignment targets, including the supported local aliases and shared
 nested references. Calls conservatively invalidate exposed mutable references;

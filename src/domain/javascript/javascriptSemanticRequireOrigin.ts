@@ -16,7 +16,10 @@ import {
 } from "./javascriptAstValues.js";
 import { semanticPropertyPathKeyMatches } from "./javascriptSemanticPropertyPaths.js";
 import { stringValue } from "./javascriptStaticAnalysisHelpers.js";
-import { semanticTopLevelEffectFollowsCapture } from "./javascriptSemanticMutationInitializers.js";
+import {
+  semanticReadInitializers,
+  semanticTopLevelEffectFollowsCapture,
+} from "./javascriptSemanticMutationInitializers.js";
 import { createSemanticModuleInterop } from "./javascriptModuleInterop.js";
 
 export interface JavaScriptRequireOrigin {
@@ -215,11 +218,27 @@ const writesModuleRequire = (
     const binding = resolveSemanticBindingState(state, value, value.name);
     if (binding === undefined || visited.has(binding.bindingId)) return false;
     const next = new Set(visited).add(binding.bindingId);
+    const { initializers } = semanticReadInitializers(
+      binding,
+      value,
+      state.parentsByNode,
+    );
     return (
-      binding.initializers.length > 0 &&
-      binding.initializers.every(({ node: init }) => isModuleObject(init, next))
+      initializers.length > 0 &&
+      initializers.every(
+        ({ node: init, projection }) =>
+          projection.length === 0 && isModuleObject(init, next),
+      )
     );
   };
+  // Unknown keys, spread sources and accessors may all replace the delegate.
+  const mayContainRequire = (source: t.Node | undefined): boolean =>
+    !t.isObjectExpression(source) ||
+    source.properties.some((property) => {
+      if (t.isSpreadElement(property)) return true;
+      const key = semanticStaticPropertyKey(property.key, property.computed);
+      return key === null || key === "require";
+    });
   traverseJavaScriptAst(state.program, {
     enter: (node) => {
       const target = t.isAssignmentExpression(node)
@@ -266,7 +285,8 @@ const writesModuleRequire = (
         const args = invocation?.arguments;
         if (
           (owner === "Object" || owner === "Reflect") &&
-          method === "defineProperty" &&
+          (method === "defineProperty" ||
+            (owner === "Reflect" && method === "set")) &&
           isModuleObject(args?.[0] ?? t.nullLiteral())
         ) {
           const key = interop.staticString(args?.[1]);
@@ -277,44 +297,13 @@ const writesModuleRequire = (
           isModuleObject(args?.[0] ?? t.nullLiteral())
         ) {
           const descriptors = args?.[1];
-          if (
-            !t.isObjectExpression(descriptors) ||
-            descriptors.properties.some(
-              (property) =>
-                t.isSpreadElement(property) ||
-                (t.isObjectProperty(property) &&
-                  semanticStaticPropertyKey(property.key, property.computed) ===
-                    "require"),
-            )
-          )
-            writes.push(node);
+          if (mayContainRequire(descriptors)) writes.push(node);
         } else if (
           owner === "Object" &&
           method === "assign" &&
-          args?.some((arg) => isModuleObject(arg))
+          isModuleObject(args?.[0] ?? t.nullLiteral())
         ) {
-          const target = args?.[0];
-          if (target !== undefined && isModuleObject(target)) {
-            const sourceHasRequire = args
-              ?.slice(1)
-              .some(
-                (arg) =>
-                  t.isObjectExpression(arg) &&
-                  arg.properties.some(
-                    (property) =>
-                      t.isObjectProperty(property) &&
-                      semanticStaticPropertyKey(
-                        property.key,
-                        property.computed,
-                      ) === "require",
-                  ),
-              );
-            if (
-              sourceHasRequire ||
-              args?.slice(1).some((arg) => !t.isObjectExpression(arg))
-            )
-              writes.push(node);
-          }
+          if (args?.slice(1).some(mayContainRequire)) writes.push(node);
         }
       }
     },
