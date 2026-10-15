@@ -600,7 +600,8 @@ export function* indexJavaScriptElectronIdentitySteps(
         exported === undefined
           ? (interop.intrinsicPath(root) ??
             (kind === "member"
-              ? interop.boundIntrinsic(root)?.path
+              ? (interop.boundIntrinsic(root)?.path ??
+                interop.capturedInvocationMemberPath(root))
               : undefined))
           : ["electron", ...exported];
       return path === undefined ? [] : [[...path, ...members]];
@@ -608,10 +609,11 @@ export function* indexJavaScriptElectronIdentitySteps(
     interop.intrinsicInvocation,
     interop.staticString,
     interop.isFreshObject,
-    (node, path) => {
+    (node, path, kind) => {
       if (path[0] === "electron") writes.retain(path);
-      else interop.retainWrite(node, path);
+      else interop.retainWrite(node, path, kind);
     },
+    interop.observeEvaluation,
   );
   collectedWrites = true;
   const intactExport = (path: readonly (string | null)[]): boolean =>

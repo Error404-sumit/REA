@@ -1,6 +1,9 @@
 import * as t from "@babel/types";
 
-import type { JavaScriptIntrinsicInvocation } from "./javascriptElectronMemberWrites.js";
+import {
+  intrinsicInvocationMemberPath,
+  type JavaScriptIntrinsicInvocation,
+} from "./javascriptElectronMemberWrites.js";
 import {
   semanticStaticPropertyKey,
   unwrapJavaScriptExpression,
@@ -72,6 +75,9 @@ export const resolveJavaScriptIntrinsicInvocation = (
   intrinsicPath: (node: t.Node) => readonly string[] | undefined,
   boundIntrinsic: (node: t.Node) => JavaScriptIntrinsicInvocation | undefined,
   intrinsicReadChanged: (node: t.Node, path: readonly string[]) => boolean,
+  memberRead?: (
+    node: t.Node,
+  ) => t.MemberExpression | t.OptionalMemberExpression | undefined,
 ): JavaScriptIntrinsicInvocation | undefined => {
   const visited = new Set<t.Node>();
   let callee: t.Node = node.callee;
@@ -79,13 +85,14 @@ export const resolveJavaScriptIntrinsicInvocation = (
     expandJavaScriptInvocationArguments(node.arguments);
   let receiver: t.Node | undefined;
   let explicitReceiver = false;
+  let boundPrefixApplied = false;
   for (;;) {
     callee = unwrapJavaScriptExpression(callee).node;
     if (t.isSequenceExpression(callee)) {
       const finalExpression = callee.expressions.at(-1);
       if (finalExpression === undefined) return undefined;
-      // The comma operator returns the final value without its member receiver.
-      // Keep that lost receiver explicit so intrinsic call/apply stays unknown.
+      // The comma operator produces a value and erases the member receiver.
+      // An explicit receiver already supplied by an outer call remains intact.
       explicitReceiver = true;
       callee = finalExpression;
       continue;
@@ -106,14 +113,57 @@ export const resolveJavaScriptIntrinsicInvocation = (
         );
         if (method === "call" || method === "apply") {
           const bound = boundIntrinsic(callee.object);
+          // An alias can capture an invocation member read, as in
+          // `const invoke = change.call` — its stored value is the member's
+          // function. Follow the captured read before giving up on a callable.
+          const member:
+            | t.MemberExpression
+            | t.OptionalMemberExpression
+            | undefined =
+            bound === undefined ? memberRead?.(callee.object) : undefined;
+          if (bound === undefined && member === undefined) return undefined;
+          const memberPath: readonly string[] | undefined =
+            member === undefined
+              ? undefined
+              : intrinsicInvocationMemberPath(member);
+          if (explicitReceiver && !t.isExpression(receiver))
+            return {
+              kind: "opaque",
+              path: bound?.path ?? memberPath ?? ["intrinsic"],
+              arguments: undefined,
+            };
           if (
             bound !== undefined &&
             intrinsicReadChanged(callee, [...bound.path, method])
           )
             return { kind: "opaque", path: bound.path, arguments: undefined };
+          if (
+            member !== undefined &&
+            memberPath !== undefined &&
+            intrinsicReadChanged(member, memberPath)
+          )
+            return { kind: "opaque", path: memberPath, arguments: undefined };
+          // The alias froze the member's value at its initializer, but the
+          // callee reads the member again now: `invoke.call` resolves a new
+          // slot on the captured function. A replaced outer member is not
+          // the intrinsic, so this call cannot claim a confirmed write.
+          const callSitePath: readonly string[] | undefined =
+            memberPath === undefined ? undefined : [...memberPath, method];
+          if (
+            member !== undefined &&
+            callSitePath !== undefined &&
+            intrinsicReadChanged(callee, callSitePath)
+          )
+            return { kind: "opaque", path: callSitePath, arguments: undefined };
+          // Function.prototype.call/apply uses the outer explicit receiver
+          // as its callable, even when the member was read from a bound value.
+          const callable: t.Node | undefined = explicitReceiver
+            ? receiver
+            : (member ?? callee.object);
+          if (!t.isExpression(callable)) return undefined;
           receiver = arguments_?.[0];
           explicitReceiver = true;
-          callee = callee.object;
+          callee = callable;
           arguments_ = invocationArguments(method, arguments_);
           continue;
         }
@@ -125,11 +175,40 @@ export const resolveJavaScriptIntrinsicInvocation = (
       receiver = bound.receiver;
       explicitReceiver = true;
       arguments_ =
-        bound.arguments === undefined
+        bound.arguments === undefined || arguments_ === undefined
           ? undefined
-          : [...bound.arguments, ...(arguments_ ?? [])];
+          : [...bound.arguments, ...arguments_];
+      boundPrefixApplied = bound.arguments !== undefined;
     }
     const method = path.length > 3 ? path.at(-1) : undefined;
+    if (method === "bind") {
+      const bound = boundIntrinsic(callee);
+      if (bound !== undefined)
+        return {
+          ...bound,
+          arguments:
+            bound.kind !== "known"
+              ? undefined
+              : boundPrefixApplied
+                ? arguments_
+                : bound.arguments === undefined || arguments_ === undefined
+                  ? undefined
+                  : [...bound.arguments, ...arguments_],
+        };
+      const callable = explicitReceiver
+        ? receiver
+        : t.isMemberExpression(callee) || t.isOptionalMemberExpression(callee)
+          ? callee.object
+          : undefined;
+      if (!t.isExpression(callable))
+        return { kind: "opaque", path, arguments: undefined };
+      return {
+        kind: "known",
+        path: ["intrinsic", "Function", "prototype", "bind"],
+        receiver: callable,
+        arguments: arguments_,
+      };
+    }
     if (method === "call" || method === "apply") {
       // These properties hold generic function values. Their receiver selects
       // the callable; property-chain depth does not consume more arguments.
@@ -138,6 +217,12 @@ export const resolveJavaScriptIntrinsicInvocation = (
         : t.isMemberExpression(callee) || t.isOptionalMemberExpression(callee)
           ? callee.object
           : undefined;
+      // The callee resolves to an invocation member read but names no
+      // callable, as when an identifier aliases `Object.defineProperty.call`
+      // and is invoked bare. Such a call throws TypeError when no callable
+      // receiver exists, which static analysis cannot prove. An unexamined
+      // receiver is unknown effect, neither proof of no write nor a
+      // confirmed write.
       if (!t.isExpression(callable))
         return { kind: "opaque", path, arguments: undefined };
       callee = callable;

@@ -17,16 +17,20 @@ import {
 } from "./javascriptSemanticTraversal.js";
 import {
   electronMemberPath,
+  intrinsicInvocationMemberPath,
+  javaScriptIdentityWriteOffset,
+  type JavaScriptIdentityWriteKind,
   type JavaScriptIntrinsicInvocation,
 } from "./javascriptElectronMemberWrites.js";
 import {
   expandJavaScriptInvocationArguments,
   resolveJavaScriptIntrinsicInvocation,
 } from "./javascriptIntrinsicInvocation.js";
-import { SemanticPropertyPathCoverage } from "./javascriptSemanticPropertyPaths.js";
+import { semanticPropertyPathKeyMatches } from "./javascriptSemanticPropertyPaths.js";
 import {
   readExactJavaScriptLiteral,
   runtimeFunctionParameters,
+  semanticStaticPropertyKey,
   unwrapJavaScriptExpression,
 } from "./javascriptAstValues.js";
 
@@ -75,6 +79,16 @@ interface InteropHelper {
   readonly identity: boolean;
 }
 
+const intrinsicWriteCovers = (
+  written: readonly (string | null)[],
+  read: readonly string[],
+): boolean =>
+  written.length <= read.length &&
+  written.every((key, index) => {
+    const name = read[index];
+    return name !== undefined && semanticPropertyPathKeyMatches(key, name);
+  });
+
 /** Prove one inert namespace conversion without relaxing general assignment semantics. */
 export const createSemanticModuleInterop = (
   state: JavaScriptSemanticAnalysisState,
@@ -82,6 +96,14 @@ export const createSemanticModuleInterop = (
     readonly intrinsicPath: (node: t.Node) => readonly string[] | undefined;
   },
 ) => {
+  // Evaluation order, unlike source offsets, preserves RHS-before-pattern and
+  // each destructuring write before subsequent defaults and computed keys.
+  const evaluationOrder = new WeakMap<t.Node, number>();
+  let evaluationClock = 0;
+  const evaluationOffset = (node: t.Node): number =>
+    evaluationClock === 0
+      ? (node.start ?? -1)
+      : (evaluationOrder.get(node) ?? Infinity);
   const helpers = new Map<string, InteropHelper | null>();
   const origins = new Map<string, InteropOrigin>();
   const calls = new WeakMap<t.Node, InteropOrigin>();
@@ -89,8 +111,19 @@ export const createSemanticModuleInterop = (
   const writes: {
     readonly scope: string;
     readonly offset: number;
-    readonly coverage: SemanticPropertyPathCoverage;
+    readonly path: readonly (string | null)[];
+    readonly kind: JavaScriptIdentityWriteKind;
   }[] = [];
+  const invocationMemberWriteCovers = (
+    write: (typeof writes)[number],
+    read: readonly string[],
+  ): boolean =>
+    (write.kind === "opaque" ||
+      // A member mutation retains an unknown child key (`[null]`); the wildcard
+      // segment scopes coverage to the mutated object's members and deeper.
+      (write.kind === "mutate-object" && write.path.at(-1) === null) ||
+      (write.kind === "replace-value" && write.path.length === read.length)) &&
+    intrinsicWriteCovers(write.path, read);
   const invalidatedBindings = new Map<string, boolean>();
   const invalidatedCalls = new WeakMap<t.Node, boolean>();
   const opaqueMutationPath = (node: t.Node): readonly string[] => {
@@ -126,6 +159,12 @@ export const createSemanticModuleInterop = (
         const { root, members } = electronMemberPath(current);
         if (members.some((member) => member === null)) return finish(undefined);
         suffix = [...(members as readonly string[]), ...suffix];
+        if (t.isSequenceExpression(root)) {
+          const value = root.expressions.at(-1);
+          if (value === undefined) return finish(undefined);
+          current = value;
+          continue;
+        }
         for (const global of ["Object", "Function", "Reflect"])
           if (isUnshadowedGlobal(root, state, global))
             return finish(["intrinsic", global, ...suffix]);
@@ -166,8 +205,20 @@ export const createSemanticModuleInterop = (
     let capturedAt = node;
     let suffixLength = 0;
     for (;;) {
+      current = unwrapJavaScriptExpression(current).node;
+      if (suffixLength === 0)
+        capturedAt =
+          t.isMemberExpression(current) || t.isOptionalMemberExpression(current)
+            ? current.property
+            : current;
       const { root, members } = electronMemberPath(current);
       suffixLength += members.length;
+      if (t.isSequenceExpression(root)) {
+        const value = root.expressions.at(-1);
+        if (value === undefined) return undefined;
+        current = value;
+        continue;
+      }
       if (!t.isIdentifier(root)) return undefined;
       const binding = resolveSemanticBindingState(state, root, root.name);
       if (binding === undefined) return { path, capturedAt };
@@ -218,24 +269,94 @@ export const createSemanticModuleInterop = (
     node: t.Node,
     path: readonly string[],
   ): boolean => {
-    const capture = capturedIntrinsic(node)?.capturedAt ?? node;
-    const scope = opaqueMutationPath(capture).join(".");
-    const method = path.at(-1);
-    const invocationMethod =
-      method === "bind" || method === "call" || method === "apply";
-    return writes.some(
-      (write) =>
-        (write.scope === scope || write.scope === "intrinsic") &&
-        write.offset < (capture.start ?? -1) &&
-        (write.coverage.covers(path) ||
-          (invocationMethod &&
-            write.coverage.covers([
-              "intrinsic",
-              "Function",
-              "prototype",
-              method,
-            ]))),
-    );
+    let current = unwrapJavaScriptExpression(node).node;
+    let currentPath = path;
+    const aliases = new Set<string>();
+    for (;;) {
+      current = unwrapJavaScriptExpression(current).node;
+      if (t.isSequenceExpression(current)) {
+        const value = current.expressions.at(-1);
+        if (value === undefined) return true;
+        current = value;
+        continue;
+      }
+      const method = currentPath.at(-1);
+      const invocationMethod =
+        method === "bind" || method === "call" || method === "apply";
+      // Recover the member read at an alias initializer before examining its
+      // base capture. Copying a callable does not recapture its original owner.
+      if (invocationMethod && t.isIdentifier(current)) {
+        const binding = resolveSemanticBindingState(
+          state,
+          current,
+          current.name,
+        );
+        const initializer = semanticStableInitializer(binding, state);
+        if (
+          binding !== undefined &&
+          initializer !== undefined &&
+          initializer.projection.length === 0 &&
+          (initializer.node.end ?? Infinity) < (current.start ?? -1) &&
+          !aliases.has(binding.bindingId)
+        ) {
+          aliases.add(binding.bindingId);
+          current = initializer.node;
+          continue;
+        }
+      }
+      if (
+        invocationMethod &&
+        (t.isMemberExpression(current) || t.isOptionalMemberExpression(current))
+      ) {
+        // Reading an invocation member does not recapture the stored function.
+        // Check member writes now, then check its base at the earlier capture.
+        const scope = opaqueMutationPath(current).join(".");
+        const offset = evaluationOffset(current);
+        // A nested invocation member reads a slot on the member's own
+        // function: `X.apply.apply` reads `Function.prototype.apply.apply`,
+        // one segment deeper than the mutated `Function.prototype.apply`.
+        const previous = currentPath.at(-2);
+        const nestedRead =
+          previous === "call" || previous === "apply" || previous === "bind"
+            ? ["intrinsic", "Function", "prototype", previous, method]
+            : undefined;
+        if (
+          writes.some(
+            (write) =>
+              (write.scope === scope || write.scope === "intrinsic") &&
+              write.offset < offset &&
+              (invocationMemberWriteCovers(write, currentPath) ||
+                invocationMemberWriteCovers(write, [
+                  "intrinsic",
+                  "Function",
+                  "prototype",
+                  method,
+                ]) ||
+                (nestedRead !== undefined &&
+                  invocationMemberWriteCovers(write, nestedRead))),
+          )
+        )
+          return true;
+        current = unwrapJavaScriptExpression(current.object).node;
+        currentPath = currentPath.slice(0, -1);
+        continue;
+      }
+      const capture = capturedIntrinsic(current)?.capturedAt ?? current;
+      const scope = opaqueMutationPath(capture).join(".");
+      return writes.some(
+        (write) =>
+          (write.scope === scope || write.scope === "intrinsic") &&
+          write.offset < evaluationOffset(capture) &&
+          (intrinsicWriteCovers(write.path, currentPath) ||
+            (invocationMethod &&
+              intrinsicWriteCovers(write.path, [
+                "intrinsic",
+                "Function",
+                "prototype",
+                method,
+              ]))),
+      );
+    }
   };
 
   const resolveBoundIntrinsic = (
@@ -279,7 +400,7 @@ export const createSemanticModuleInterop = (
       if (members.at(-1) === "bind") {
         // A direct .bind may continue a bound callable, without discarding members.
         if (!terminal && members.length !== 1) return undefined;
-        bindReads.push(captured?.capturedAt ?? current.callee);
+        bindReads.push(current.callee);
       } else {
         // Reuse the invocation owner for generic call/apply/Reflect.apply of bind.
         const invocation = resolveJavaScriptIntrinsicInvocation(
@@ -287,6 +408,7 @@ export const createSemanticModuleInterop = (
           intrinsicPath,
           boundIntrinsic,
           intrinsicReadChanged,
+          capturedInvocationMember,
         );
         if (
           invocation?.kind !== "known" ||
@@ -299,6 +421,8 @@ export const createSemanticModuleInterop = (
         captured = capturedIntrinsic(bindTarget);
         terminal = captured !== undefined;
         path = captured?.path;
+        opaqueArguments ||=
+          path !== undefined && intrinsicReadChanged(bindTarget, path);
       }
       receiver = bindingArguments?.[0];
       const ownArguments = bindingArguments?.slice(1) ?? [];
@@ -313,17 +437,9 @@ export const createSemanticModuleInterop = (
         continue;
       }
       const boundPath = [...path, "bind"];
-      const functionBind = ["intrinsic", "Function", "prototype", "bind"];
-      opaqueArguments ||= bindReads.some((capture) => {
-        const scope = opaqueMutationPath(capture).join(".");
-        return writes.some(
-          (write) =>
-            (write.scope === scope || write.scope === "intrinsic") &&
-            write.offset < (capture.start ?? -1) &&
-            (write.coverage.covers(boundPath) ||
-              write.coverage.covers(functionBind)),
-        );
-      });
+      opaqueArguments ||= bindReads.some((capture) =>
+        intrinsicReadChanged(capture, boundPath),
+      );
       return {
         kind: opaqueArguments ? "opaque" : "known",
         path,
@@ -334,6 +450,44 @@ export const createSemanticModuleInterop = (
           : argumentGroups.toReversed().flat(),
       };
     }
+  };
+
+  // An alias initializer can hold a captured invocation member read, as in
+  // `const invoke = bound.call`. The initializer stores the member's function
+  // value at read time; follow it so the alias remains a usable callable.
+  const capturedInvocationMember = (
+    node: t.Node,
+  ): t.MemberExpression | t.OptionalMemberExpression | undefined => {
+    const current = unwrapJavaScriptExpression(node).node;
+    if (!t.isIdentifier(current)) return undefined;
+    const binding = resolveSemanticBindingState(state, current, current.name);
+    const initializer = semanticStableInitializer(binding, state);
+    if (
+      binding === undefined ||
+      initializer === undefined ||
+      initializer.projection.length !== 0 ||
+      (initializer.node.end ?? Infinity) >= (current.start ?? -1)
+    )
+      return undefined;
+    const member = unwrapJavaScriptExpression(initializer.node).node;
+    if (!t.isMemberExpression(member) && !t.isOptionalMemberExpression(member))
+      return undefined;
+    const key = semanticStaticPropertyKey(member.property, member.computed);
+    return key === "call" || key === "apply" || key === "bind"
+      ? member
+      : undefined;
+  };
+
+  // The read side resolves an alias of `callable.call` to the stored member
+  // function's identity; writes through the alias must land on that same path
+  // or they can never invalidate the captured read.
+  const capturedInvocationMemberPath = (
+    node: t.Node,
+  ): readonly string[] | undefined => {
+    const member = capturedInvocationMember(node);
+    return member === undefined
+      ? undefined
+      : intrinsicInvocationMemberPath(member);
   };
 
   const activeBoundValues = new WeakSet<t.Node>();
@@ -610,8 +764,8 @@ export const createSemanticModuleInterop = (
       return writes.some(
         (write) =>
           (write.scope === scope || write.scope === "intrinsic") &&
-          write.offset < (capturedAt.start ?? -1) &&
-          write.coverage.covers(path),
+          write.offset < evaluationOffset(capturedAt) &&
+          intrinsicWriteCovers(write.path, path),
       );
     }) ?? false;
   return {
@@ -624,18 +778,29 @@ export const createSemanticModuleInterop = (
         intrinsicPath,
         boundIntrinsic,
         intrinsicReadChanged,
+        capturedInvocationMember,
       ),
     boundIntrinsic,
+    capturedInvocationMemberPath,
     staticString,
     isFreshObject,
     opaqueMutationPath,
-    retainWrite: (node: t.Node, path: readonly (string | null)[]) => {
-      const coverage = new SemanticPropertyPathCoverage();
-      coverage.retain(path[0] === "opaque-intrinsic" ? ["intrinsic"] : path);
+    observeEvaluation: (node: t.Node): void => {
+      evaluationOrder.set(node, ++evaluationClock);
+    },
+    retainWrite: (
+      node: t.Node,
+      path: readonly (string | null)[],
+      kind: JavaScriptIdentityWriteKind = "replace-value",
+    ) => {
       writes.push({
         scope: opaqueMutationPath(node).join("."),
-        offset: node.start ?? Infinity,
-        coverage,
+        offset:
+          evaluationClock === 0
+            ? javaScriptIdentityWriteOffset(node)
+            : evaluationOffset(node),
+        path: path[0] === "opaque-intrinsic" ? ["intrinsic"] : path,
+        kind,
       });
     },
     invalidated: (binding: JavaScriptSemanticBindingState): boolean => {
