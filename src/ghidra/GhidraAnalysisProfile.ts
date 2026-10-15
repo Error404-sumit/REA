@@ -41,6 +41,7 @@ import {
   NATIVE_AOT_PROFILE_CONTRACT_REVISION,
 } from "../domain/native/nativeAotPe.js";
 
+const PROTOTYPE_CONSISTENCY_EVIDENCE = "bounded-x86-32-listing-pcode-v6";
 const callRelationshipCoverage = "function-body-call-coverage-v5";
 const functionBoundaryObservations = "ghidra-function-boundary-limitations-v4";
 const instructionReferenceCoverage =
@@ -130,6 +131,7 @@ export const resolveGhidraAnalysisProfile = async (
           annotation_policy: "atomic-function-entry-metadata-v1",
           load_image_observations: "source-mappings-entry-context-v2",
           function_body_evidence: "complete-inclusive-ranges-v1",
+          prototype_consistency_evidence: PROTOTYPE_CONSISTENCY_EVIDENCE,
           function_references: "complete-body-and-entry-reference-manager-v2",
           call_relationship_coverage: callRelationshipCoverage,
           function_dossier_coverage:
@@ -230,6 +232,7 @@ export const resolveGhidraAnalysisProfile = async (
         annotation_policy: "atomic-function-entry-metadata-v1",
         load_image_observations: "source-mappings-entry-context-v2",
         function_body_evidence: "complete-inclusive-ranges-v1",
+        prototype_consistency_evidence: PROTOTYPE_CONSISTENCY_EVIDENCE,
         function_references: "complete-body-and-entry-reference-manager-v2",
         call_relationship_coverage: callRelationshipCoverage,
         function_dossier_coverage: "observed-facets-and-call-relationships-v1",

@@ -32,6 +32,7 @@ import {
 } from "./verify-real-ghidra-inventory.mjs";
 import { completeVerifierRun, createVerifierRun } from "./lib/verifier-run.mjs";
 import { hasTypedSwitchEvidence } from "./verify-real-ghidra-switch-assertions.mjs";
+import { verifyGhidraPrototypeDiagnostics } from "./verify-ghidra-prototype-diagnostics.mjs";
 
 import {
   verifyDenseDefaultReturn,
@@ -72,23 +73,6 @@ const expectedNativeTarget = nativeFixtureTarget(
   process.platform,
   process.arch,
 );
-const fixtureRoot = await mkdtemp(join(tmpdir(), "rea-ghidra-fixtures-"));
-const sourcePath = fileURLToPath(
-  new URL("../tests/conformance/ghidra/inventory.c", import.meta.url),
-);
-const crossFormatSourcePath = fileURLToPath(
-  new URL("../tests/conformance/ghidra/cross-format.c", import.meta.url),
-);
-const debugPath = join(fixtureRoot, "rea-ghidra-inventory-debug");
-const layoutPath = join(fixtureRoot, "rea-ghidra-layout.o");
-const strippedPath = join(fixtureRoot, "rea-ghidra-inventory-stripped");
-const jumpTablePath = join(fixtureRoot, "rea-ghidra-inventory-jump");
-const arm64ElfPath = join(fixtureRoot, "rea-ghidra-cross-arm64");
-const peObjectPath = join(fixtureRoot, "rea-ghidra-cross-x86_64.obj");
-const pePath = join(fixtureRoot, "rea-ghidra-cross-x86_64.exe");
-const peImportLibraryPath = join(fixtureRoot, "rea-ghidra-cross-x86_64.lib");
-const machObjectPath = join(fixtureRoot, "rea-ghidra-cross-x86_64.o");
-const malformedPath = join(fixtureRoot, "rea-ghidra-malformed");
 const compiler = process.env.REA_CC ?? "cc";
 const clang = process.env.REA_CLANG ?? "clang";
 const lld = process.env.REA_LLD ?? "ld.lld";
@@ -99,6 +83,14 @@ const lane = crossFormat
     ? "AArch64 jump-table"
     : "host-format";
 const toolchain = new Map([[compiler, "host fixture compiler"]]);
+if (
+  process.platform === "linux" &&
+  process.arch === "x64" &&
+  !aarch64JumpTableOnly
+) {
+  toolchain.set(process.env.REA_AS ?? "as", "GNU assembler");
+  toolchain.set(process.env.REA_LD ?? "ld", "GNU linker");
+}
 if (crossFormat || aarch64JumpTableOnly)
   toolchain.set(clang, "cross-format clang compiler");
 if (crossFormat) {
@@ -112,7 +104,19 @@ const crossTarget = crossFormat
     : `${expectedNativeTarget.format}/${expectedNativeTarget.architecture}`;
 for (const [command, role] of toolchain) {
   try {
-    await exec(command, [command === lldLink ? "/?" : "--version"]);
+    const result = await exec(command, [
+      command === lldLink ? "/?" : "--version",
+    ]);
+    if (
+      role === "GNU assembler" &&
+      !/GNU assembler/iu.test(`${result.stdout}\n${result.stderr}`)
+    )
+      throw new Error("The configured assembler is not GNU as");
+    if (
+      role === "GNU linker" &&
+      !/GNU ld/iu.test(`${result.stdout}\n${result.stderr}`)
+    )
+      throw new Error("The configured linker is not GNU ld");
   } catch (cause) {
     throw new Error(
       `Ghidra ${lane} verification cannot run for target ${crossTarget}: required ${role} '${command}' is unavailable or failed its preflight.`,
@@ -120,7 +124,24 @@ for (const [command, role] of toolchain) {
     );
   }
 }
+const fixtureRoot = await mkdtemp(join(tmpdir(), "rea-ghidra-fixtures-"));
 try {
+  const sourcePath = fileURLToPath(
+    new URL("../tests/conformance/ghidra/inventory.c", import.meta.url),
+  );
+  const crossFormatSourcePath = fileURLToPath(
+    new URL("../tests/conformance/ghidra/cross-format.c", import.meta.url),
+  );
+  const debugPath = join(fixtureRoot, "rea-ghidra-inventory-debug");
+  const layoutPath = join(fixtureRoot, "rea-ghidra-layout.o");
+  const strippedPath = join(fixtureRoot, "rea-ghidra-inventory-stripped");
+  const jumpTablePath = join(fixtureRoot, "rea-ghidra-inventory-jump");
+  const arm64ElfPath = join(fixtureRoot, "rea-ghidra-cross-arm64");
+  const peObjectPath = join(fixtureRoot, "rea-ghidra-cross-x86_64.obj");
+  const pePath = join(fixtureRoot, "rea-ghidra-cross-x86_64.exe");
+  const peImportLibraryPath = join(fixtureRoot, "rea-ghidra-cross-x86_64.lib");
+  const machObjectPath = join(fixtureRoot, "rea-ghidra-cross-x86_64.o");
+  const malformedPath = join(fixtureRoot, "rea-ghidra-malformed");
   const common = ["-O0", "-g", "-fno-inline"];
   if (expectedNativeTarget.format === "elf") common.push("-fno-pie", "-no-pie");
   await exec(compiler, [...common, sourcePath, "-o", debugPath]);
@@ -331,6 +352,16 @@ try {
       ? (crossResults[0]?.native_api_cli ?? null)
       : jumpTable.native_api_cli,
     native_value_e2e: debug.native_values,
+    prototype_diagnostics:
+      process.platform === "linux" &&
+      process.arch === "x64" &&
+      !aarch64JumpTableOnly
+        ? await verifyGhidraPrototypeDiagnostics({ installation })
+        : {
+            status: "unverified",
+            reason:
+              "The x86-32 instruction oracle requires the Linux x64 GNU assembler lane.",
+          },
     custom_target: custom === null ? null : summary(custom),
     cleanup: "complete",
   };
@@ -448,7 +479,19 @@ async function verifyNativeApiCli(
       ) ||
       expectedCases.some((caseValue) => !denseCases.has(caseValue)) ||
       !mappingsAreExact ||
-      evidence.normalized_result?.residual_unknowns?.length !== 0)
+      JSON.stringify(
+        [...evidence.normalized_result.residual_unknowns].sort(),
+      ) !==
+        JSON.stringify(
+          [
+            ...new Set([
+              ...boundary.prototype_check_limitations,
+              ...boundary.prototype_diagnostics.flatMap(
+                ({ residual_unknowns }) => residual_unknowns,
+              ),
+            ]),
+          ].sort(),
+        ))
   )
     throw new Error(
       `The shipped inspect-native-api CLI did not preserve complete dense jump-table output: ${stdout}`,

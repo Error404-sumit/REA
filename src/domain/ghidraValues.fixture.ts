@@ -81,6 +81,10 @@ export const ghidraNativeApiBoundary = () => ({
     ],
   },
   parameters: [],
+  prototype_diagnostics: [],
+  prototype_check_limitations: [
+    "Bounded instruction/prototype checks do not establish prototype consistency.",
+  ],
   jump_tables: [
     {
       dispatch_address: "0x401010",
