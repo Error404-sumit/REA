@@ -62,7 +62,10 @@ import {
 } from "./javascriptElectronMemberWrites.js";
 import { range } from "./javascriptStaticAnalysisHelpers.js";
 import { semanticCoverage } from "./javascriptSemanticCoverage.js";
-import { semanticResourceLimitsIn } from "./javascriptSemanticResourceLimits.js";
+import {
+  semanticResourceLimitsIn,
+  semanticResourceLimitReason,
+} from "./javascriptSemanticResourceLimits.js";
 import {
   parseJavaScriptSource,
   type ParsedJavaScriptSource,
@@ -197,14 +200,20 @@ export function* analyzeParsedJavaScriptSemanticsSteps(
     ...derived,
     coverage: semanticCoverage(
       parserPartial,
-      semanticResourceLimitsIn([
-        ...bindings.map(({ value }) => value),
-        ...callables.flatMap((callable) =>
-          callable.returnSites.map(({ value }) => value),
-        ),
-      ]),
+      [
+        ...new Set([
+          ...state.resourceLimits,
+          ...semanticResourceLimitsIn([
+            ...bindings.map(({ value }) => value),
+            ...callables.flatMap((callable) =>
+              callable.returnSites.map(({ value }) => value),
+            ),
+          ]),
+        ]),
+      ].sort(),
     ),
     limitations: [
+      ...[...state.resourceLimits].sort().map(semanticResourceLimitReason),
       ...(parserPartial
         ? [
             "The parser recovered from syntax errors; affected bindings are partial.",
@@ -697,6 +706,7 @@ const createState = (
   };
   return {
     program,
+    resourceLimits: new Set(),
     staticImportResolutionMode,
     parentsByNode: new WeakMap(),
     scopes: [root],
