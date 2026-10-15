@@ -29,6 +29,172 @@ afterEach(async () => {
   );
 });
 
+it.each(["late", "initial", "destroyed", "final-malformed", "out-of-scope"])(
+  "captures the current authorized frame inventory: %s",
+  async (kind) => {
+    const root = await electronFixture();
+    const mainUrl = pathToFileURL(join(root, "index.html")).href;
+    const childUrl = pathToFileURL(join(root, "child.html")).href;
+    const scriptUrl = pathToFileURL(join(root, "app.js")).href;
+    const browser = await startFakeCdpBrowser({
+      electronFileUrl: mainUrl,
+      eventsBeforeReply: ["Runtime.enable", "Debugger.enable"],
+      commandResult: ({ method }, _origin, reads) =>
+        method === "Page.getFrameTree"
+          ? {
+              frameTree: {
+                frame: { id: "frame-main", url: mainUrl },
+                childFrames:
+                  reads > 1 || kind === "initial"
+                    ? [
+                        {
+                          frame: {
+                            id: "child",
+                            parentId: "frame-main",
+                            url:
+                              kind === "out-of-scope"
+                                ? "https://foreign.test/child"
+                                : childUrl,
+                          },
+                        },
+                      ]
+                    : [],
+                ...(kind === "final-malformed" && reads > 2
+                  ? {
+                      childFrames: [
+                        {
+                          frame: {
+                            id: "child",
+                            parentId: "frame-main",
+                            url: childUrl,
+                          },
+                        },
+                        null,
+                      ],
+                    }
+                  : {}),
+              },
+            }
+          : method === "Debugger.getScriptSource"
+            ? { scriptSource: "void 0;" }
+            : undefined,
+      commandEvents: ({ method, sessionId }) =>
+        method === "Runtime.enable"
+          ? [
+              {
+                method: "Runtime.executionContextCreated",
+                ...(sessionId === undefined ? {} : { sessionId }),
+                params: { context: { id: 7, auxData: { frameId: "child" } } },
+              },
+            ]
+          : method === "Debugger.enable"
+            ? [
+                {
+                  method: "Debugger.scriptParsed",
+                  ...(sessionId === undefined ? {} : { sessionId }),
+                  params: {
+                    scriptId: "child-script",
+                    url: scriptUrl,
+                    executionContextId: 7,
+                    length: 7,
+                    scriptLanguage: "JavaScript",
+                  },
+                },
+                ...(kind === "destroyed"
+                  ? [
+                      {
+                        method: "Runtime.executionContextDestroyed",
+                        ...(sessionId === undefined ? {} : { sessionId }),
+                        params: { executionContextId: 7 },
+                      },
+                    ]
+                  : []),
+              ]
+            : undefined,
+    });
+    browsers.push(browser);
+    const inspected = await new CdpElectronProvider().inspectPage(
+      inspectElectronPageInputSchema.parse({
+        cdp_endpoint: browser.endpoint,
+        target_id: "electron-page",
+        observation_ms: 0,
+        include_script_sources: true,
+      }),
+    );
+    if (!inspected.ok) throw inspected.error;
+    expect(
+      inspected.value.frames.some(({ frame_id }) => frame_id === "child"),
+    ).toBe(kind !== "out-of-scope");
+    expect(inspected.value.scripts.items).toContainEqual(
+      expect.objectContaining({
+        file_path: join(root, "app.js"),
+        frame_id:
+          kind === "destroyed" || kind === "out-of-scope" ? null : "child",
+      }),
+    );
+    if (kind === "final-malformed") {
+      expect(inspected.value.completeness.attach_limited_sections).toEqual(
+        expect.arrayContaining(["frames", "scripts", "workers"]),
+      );
+      expect(
+        inspected.value.completeness.excluded.filter(
+          ({ section }) => section === "frames",
+        ),
+      ).toEqual([]);
+    }
+  },
+);
+it.each(["reordered", "parent-changed", "path-changed"])(
+  "compares semantic frame inventory independent of sibling order: %s",
+  async (kind) => {
+    const root = await electronFixture();
+    const main = pathToFileURL(join(root, "index.html")).href;
+    const child = pathToFileURL(join(root, "child.html")).href;
+    const app = pathToFileURL(join(root, "app.js")).href;
+    const browser = await startFakeCdpBrowser({
+      electronFileUrl: main,
+      commandResult: ({ method }, _origin, reads) => {
+        if (method !== "Page.getFrameTree") return undefined;
+        const first = {
+          frame: {
+            id: "first",
+            parentId:
+              reads > 2 && kind === "parent-changed" ? "second" : "frame-main",
+            url: reads > 2 && kind === "path-changed" ? app : child,
+          },
+        };
+        const second = {
+          frame: { id: "second", parentId: "frame-main", url: app },
+        };
+        return {
+          frameTree: {
+            frame: { id: "frame-main", url: main },
+            childFrames: reads > 2 ? [second, first] : [first, second],
+          },
+        };
+      },
+    });
+    browsers.push(browser);
+    const result = await new CdpElectronProvider().inspectPage(
+      inspectElectronPageInputSchema.parse({
+        cdp_endpoint: browser.endpoint,
+        target_id: "electron-page",
+        observation_ms: 0,
+      }),
+    );
+    if (!result.ok) throw result.error;
+    expect(result.value.frames.map(({ frame_id }) => frame_id)).toEqual([
+      "frame-main",
+      "first",
+      "second",
+    ]);
+    for (const section of ["frames", "scripts", "workers"] as const)
+      expect(
+        result.value.completeness.attach_limited_sections.includes(section),
+      ).toBe(kind !== "reordered");
+  },
+);
+
 describe("CdpElectronProvider target access", () => {
   it("returns every in-scope resource beyond the former collection ceiling", async () => {
     const root = await electronFixture();

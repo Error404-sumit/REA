@@ -49,8 +49,13 @@ export const captureFrames = (
   )) {
     const frame = recordValue(tree.frame);
     const frameId = cdpStringValue(frame?.id);
-    const sanitized = allowedSanitizedUrl(frame?.url, allowedOrigins);
+    const frameUrl = cdpFrameUrl(frame);
+    const sanitized = allowedSanitizedUrl(frameUrl, allowedOrigins);
     if (frame === undefined || frameId === undefined) {
+      completeness?.exclude("frames", "invalid_protocol_value");
+      continue;
+    }
+    if (frame.urlFragment !== undefined && frameUrl === undefined) {
       completeness?.exclude("frames", "invalid_protocol_value");
       continue;
     }
@@ -81,9 +86,21 @@ export const captureFrames = (
 
 /** Read the current main-frame URL from an untrusted Page.getFrameTree result. */
 export const mainFrameUrl = (result: unknown): string | undefined =>
-  cdpStringValue(
-    recordValue(recordValue(requiredRecord(result).frameTree)?.frame)?.url,
+  cdpFrameUrl(
+    recordValue(recordValue(requiredRecord(result).frameTree)?.frame),
   );
+
+/** CDP splits the fragment from Frame.url; retain the complete observed URL. */
+export const cdpFrameUrl = (
+  frame: UnknownRecord | undefined,
+): string | undefined => {
+  const url = cdpStringValue(frame?.url);
+  if (url === undefined || frame?.urlFragment === undefined) return url;
+  const fragment = cdpStringValue(frame.urlFragment);
+  if (fragment === undefined || (fragment !== "" && !fragment.startsWith("#")))
+    return undefined;
+  return `${url.split("#", 1)[0] ?? ""}${fragment}`;
+};
 
 /** Normalize every allowed resource. */
 export const captureResources = (

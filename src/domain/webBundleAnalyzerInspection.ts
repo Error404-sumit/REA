@@ -8,7 +8,11 @@ import { traverseJavaScriptAst } from "./javascript/javascriptSemanticTraversal.
 import { indexJavaScriptBindingsWithReceiversSteps } from "./javascript/javascriptSemanticAnalysis.js";
 import { completeSemanticSteps } from "./javascript/javascriptSemanticTraversal.js";
 import type { JavaScriptOpenReceiverFact } from "./javascript/javascriptSemanticAnalysis.js";
-import { semanticStaticPropertyName } from "./javascript/javascriptAstValues.js";
+import {
+  semanticFinalObjectProperty,
+  semanticStaticPropertyKey,
+  semanticStaticPropertyName,
+} from "./javascript/javascriptAstValues.js";
 import {
   calleeName,
   endpointArgument,
@@ -18,7 +22,6 @@ import {
   location,
   locationFields,
   objectString,
-  objectValue,
   resolveSpecifier,
   isUrlLikeModuleSpecifier,
 } from "./webBundleAnalyzerAst.js";
@@ -313,22 +316,20 @@ const addWebMcpDeclaration = (
   const name = objectString(declaration, "name");
   const description = objectString(declaration, "description");
   const schema =
-    objectValue(declaration, "inputSchema") ??
-    objectValue(declaration, "input_schema");
+    semanticFinalObjectProperty(declaration, "inputSchema") ??
+    semanticFinalObjectProperty(declaration, "input_schema");
   const declaredProperties = t.isObjectExpression(schema)
-    ? objectValue(schema, "properties")
+    ? semanticFinalObjectProperty(schema, "properties")
     : undefined;
   const propertyObject = t.isObjectExpression(declaredProperties)
     ? declaredProperties
     : schema;
   const schemaPropertyNames = t.isObjectExpression(propertyObject)
-    ? propertyObject.properties.flatMap((property) =>
-        t.isObjectProperty(property)
-          ? [
-              semanticStaticPropertyName(property.key, property.computed),
-            ].filter(Boolean)
-          : [],
-      )
+    ? propertyObject.properties.flatMap((property) => {
+        if (!t.isObjectProperty(property)) return [];
+        const key = semanticStaticPropertyKey(property.key, property.computed);
+        return key === null ? [] : [key];
+      })
     : [];
   const metadata = {
     name: name ?? null,

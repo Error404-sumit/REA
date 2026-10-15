@@ -5,11 +5,60 @@ import {
   captureDom,
   captureFrames,
   captureResources,
+  cdpFrameUrl,
 } from "./CdpCaptureDocuments.js";
 import { CdpCaptureCompleteness } from "./CdpCaptureCompleteness.js";
 import { inspectWebPageInputSchema } from "../domain/browserObservation.js";
 
 const origin = "https://app.example.test";
+
+it.each([
+  [{ url: `${origin}/page?x=1#old` }, `${origin}/page?x=1#old`],
+  [
+    { url: `${origin}/page?x=1#old`, urlFragment: "#new" },
+    `${origin}/page?x=1#new`,
+  ],
+  [{ url: `${origin}/page?x=1#old`, urlFragment: "" }, `${origin}/page?x=1`],
+  [{ url: `${origin}/page`, urlFragment: null }, undefined],
+  [{ url: `${origin}/page`, urlFragment: "missing-hash" }, undefined],
+])("preserves frame URL fragment semantics: %j", (frame, expected) => {
+  expect(cdpFrameUrl(frame)).toBe(expected);
+});
+
+it("does not authorize a foreign origin through its fragment", () => {
+  const completeness = new CdpCaptureCompleteness();
+  const captured = captureFrames(
+    {
+      frameTree: {
+        frame: {
+          id: "foreign",
+          url: "https://foreign.test/page",
+          urlFragment: `#${origin}`,
+        },
+      },
+    },
+    new Set([origin]),
+    undefined,
+    completeness,
+  );
+  expect(captured.items).toEqual([]);
+  expect(completeness.snapshot().policy_filtered_sections).toContain("frames");
+});
+
+it("classifies a malformed frame fragment as unknown protocol coverage", () => {
+  const completeness = new CdpCaptureCompleteness();
+  const captured = captureFrames(
+    { frameTree: { frame: { id: "frame-main", url: origin, urlFragment: 7 } } },
+    new Set([origin]),
+    undefined,
+    completeness,
+  );
+  expect(captured.items).toEqual([]);
+  expect(completeness.snapshot()).toMatchObject({
+    unavailable_sections: ["frames"],
+    policy_filtered_sections: [],
+  });
+});
 
 describe("CDP DOM capture", () => {
   it("preserves node names and parents when aligned arrays are valid", () => {

@@ -10,9 +10,59 @@ import { inspectWebPageInputSchema } from "../../../src/domain/browserObservatio
 import { analyzeWebBundleInputSchema } from "../../../src/domain/webBundleAnalysis.js";
 import { discoverWebMcpToolsInputSchema } from "../../../src/domain/webMcpDiscovery.js";
 import { captureWebScreenshotInputSchema } from "../../../src/domain/webScreenshot.js";
+import { observeWebSessionInputSchema } from "../../../src/domain/browserSession.js";
 import { startFakeCdpBrowser } from "../../fixtures/fakeCdpBrowser.js";
 import { trackBrowser } from "./cdpBrowserProvider.support.js";
 
+it("preserves CDP's separate frame fragment in all passive URL projections", async () => {
+  const browser = await startFakeCdpBrowser({
+    commandResult: ({ method }, origin) =>
+      method === "Page.getFrameTree"
+        ? {
+            frameTree: {
+              frame: {
+                id: "frame-main",
+                loaderId: "loader-main",
+                url: `${origin}/app?token=frame-secret`,
+                urlFragment: "#details",
+              },
+            },
+          }
+        : undefined,
+  });
+  trackBrowser(browser);
+  const provider = new CdpBrowserProvider();
+  const input = {
+    cdp_endpoint: browser.endpoint,
+    allowed_origins: [browser.allowedOrigin],
+    target_id: "allowed-page",
+    observation_ms: 0,
+  };
+  const inspected = await provider.inspectPage(
+    inspectWebPageInputSchema.parse(input),
+  );
+  const screenshot = await provider.captureScreenshot(
+    captureWebScreenshotInputSchema.parse({
+      cdp_endpoint: input.cdp_endpoint,
+      allowed_origins: input.allowed_origins,
+      target_id: input.target_id,
+    }),
+  );
+  const observed = await provider.observeSession(
+    observeWebSessionInputSchema.parse({ ...input, observation_ms: 1 }),
+  );
+  if (!inspected.ok) throw inspected.error;
+  if (!screenshot.ok) throw screenshot.error;
+  if (!observed.ok) throw observed.error;
+  const url = `${browser.allowedOrigin}/app?token=frame-secret#details`;
+  expect(inspected.value.target.url).toBe(url);
+  expect(inspected.value.frames[0]?.url).toBe(url);
+  expect(screenshot.value.target.url).toBe(url);
+  expect(observed.value.target).toMatchObject({
+    initial_url: url,
+    final_url: url,
+  });
+});
 describe("CdpBrowserProvider: approved accessibility and source capture", () => {
   it("captures approved accessibility text inline", async () => {
     const browser = await startFakeCdpBrowser();
@@ -169,6 +219,85 @@ describe("CdpBrowserProvider: approved accessibility and source capture", () => 
     });
   });
 });
+
+it.each(["after-replay", "before-replay", "replacement", "malformed"])(
+  "keeps split-fragment WebMCP frame identity: %s",
+  async (kind) => {
+    const browser = await startFakeCdpBrowser({
+      eventsBeforeReply: ["WebMCP.enable"],
+      commandResult: ({ method }, origin) =>
+        method === "Page.getFrameTree"
+          ? {
+              frameTree: {
+                frame: {
+                  id: "frame-main",
+                  loaderId: "loader-main",
+                  url: `${origin}/app`,
+                  urlFragment: "#details",
+                },
+              },
+            }
+          : undefined,
+      commandEvents: ({ method, sessionId }, origin) => {
+        if (method !== "WebMCP.enable") return undefined;
+        const frame = {
+          method: "Page.frameNavigated",
+          ...(sessionId === undefined ? {} : { sessionId }),
+          params: {
+            frame: {
+              id: "frame-main",
+              loaderId: kind === "replacement" ? "new-loader" : "loader-main",
+              url: `${origin}/app`,
+              urlFragment: kind === "malformed" ? 7 : "#details",
+            },
+          },
+        };
+        const tools = {
+          method: "WebMCP.toolsAdded",
+          ...(sessionId === undefined ? {} : { sessionId }),
+          params: {
+            tools: [
+              {
+                name: "catalog",
+                description: "fixture",
+                frameId: "frame-main",
+              },
+            ],
+          },
+        };
+        return kind === "before-replay"
+          ? [frame, tools]
+          : kind === "malformed"
+            ? [tools, frame, tools]
+            : [tools, frame];
+      },
+    });
+    trackBrowser(browser);
+    const result = await new CdpBrowserProvider().discoverWebMcpTools(
+      discoverWebMcpToolsInputSchema.parse({
+        cdp_endpoint: browser.endpoint,
+        allowed_origins: [browser.allowedOrigin],
+        target_id: "allowed-page",
+        observation_ms: 0,
+      }),
+    );
+    if (!result.ok) throw result.error;
+    if (kind === "replacement" || kind === "malformed")
+      expect(result.value.tools.items).toEqual([]);
+    else
+      expect(result.value.tools.items).toEqual([
+        expect.objectContaining({
+          name: "catalog",
+          frame_url: `${browser.allowedOrigin}/app#details`,
+        }),
+      ]);
+    if (kind === "malformed")
+      expect(result.value.completeness).toMatchObject({
+        unavailable_sections: expect.arrayContaining(["webmcp_tools"]),
+        policy_filtered_sections: [],
+      });
+  },
+);
 
 describe("CdpBrowserProvider: transient WebMCP frames", () => {
   it("drops stale child tools and reports partial coverage when a blank commit remains", async () => {

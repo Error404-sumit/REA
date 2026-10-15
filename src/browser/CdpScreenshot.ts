@@ -13,8 +13,11 @@ import {
   recordValue,
   cdpStringValue,
 } from "./CdpCaptureValues.js";
-import { mainFrameUrl } from "./CdpCaptureDocuments.js";
-import { captureFrames } from "./CdpCaptureDocuments.js";
+import {
+  cdpFrameUrl,
+  mainFrameUrl,
+  captureFrames,
+} from "./CdpCaptureDocuments.js";
 import { CdpCaptureCompleteness } from "./CdpCaptureCompleteness.js";
 import { decodeCanonicalBase64 } from "../domain/webScreenshot.js";
 import { readPngHeaderDimensions } from "../domain/pngHeader.js";
@@ -146,18 +149,28 @@ const observeScreenshotNavigation = (
   if (!isMainFrameNavigation(event, mainFrameId)) return;
   const params = recordValue(event.params);
   if (params === undefined) return;
+  // A requested navigation does not establish a committed document change.
+  // The frame-tree read after capture still verifies the selected URL.
+  if (event.method === "Page.frameRequestedNavigation") return;
   const frame =
     event.method === "Page.frameNavigated" ? recordValue(params.frame) : params;
+  if (
+    event.method === "Page.navigatedWithinDocument" &&
+    state.loaderId !== undefined &&
+    state.loaderId !== "" &&
+    cdpFrameUrl(frame) === state.url
+  )
+    return;
   if (
     event.method === "Page.frameNavigated" &&
     state.loaderId !== undefined &&
     state.loaderId !== "" &&
     cdpStringValue(frame?.loaderId) === state.loaderId &&
-    cdpStringValue(frame?.url) === state.url
+    cdpFrameUrl(frame) === state.url
   )
     return;
 
   state.changed = true;
-  if (allowedSanitizedUrl(frame?.url, origins) === undefined)
+  if (allowedSanitizedUrl(cdpFrameUrl(frame), origins) === undefined)
     state.leftScope = true;
 };
