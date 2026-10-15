@@ -9,6 +9,7 @@
     "src/application/RealHopperAssertions.ts",
     "scripts/verify/fridaBindingsCompatibility.ts",
     "scripts/verify/termux/browser.mjs",
+    "scripts/fixtures/android/split-set.mjs",
     "scripts/verify-real-ghidra-noreturn.mjs",
     "scripts/run-exact-tests.mjs",
     "tests/processOwnershipRunner.ts"
