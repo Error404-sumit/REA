@@ -1,5 +1,5 @@
 import { z } from "incur";
-import { resolve } from "node:path";
+import { anchorOperatorPath } from "./operatorPath.js";
 import { createSqliteDatabaseService } from "../composition/sqlite.js";
 import { CLI_COMMANDS } from "../cliCommandNames.js";
 import { logCliCommand } from "../cliLogging.js";
@@ -55,7 +55,7 @@ export const registerSqliteCommands = (
           const inspection = await service
             .inspect(
               {
-                path: resolve(args.path),
+                path: anchorOperatorPath(args.path),
                 ...(options.table === undefined
                   ? {}
                   : { table: options.table }),

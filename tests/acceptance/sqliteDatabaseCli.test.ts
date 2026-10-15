@@ -1,5 +1,13 @@
 import { createHash } from "node:crypto";
-import { readFile, stat, writeFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
+import {
+  mkdir,
+  readFile,
+  realpath,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect, onTestFinished } from "vitest";
@@ -593,5 +601,59 @@ cliTest.runIf(SQLITE_NATIVE_LIMITS_AVAILABLE)(
         JSON.stringify(input),
       ).toBe(true);
     }
+  },
+);
+
+// Windows resolves dot components before directory links in Win32 paths.
+cliTest
+  .skipIf(process.platform === "win32" || !SQLITE_NATIVE_LIMITS_AVAILABLE)
+  .for(["absolute", "relative"] as const)(
+  "inspects the database a %s selection with a symlink before a parent segment names",
+  async (mode, { cli }) => {
+    const root = await createTestTempDirectory("rea-sqlite-symlink-parent-");
+    await mkdir(join(root, "target", "child"), { recursive: true });
+    await symlink("target/child", join(root, "link"));
+    const marked = (path: string, marker: string): Buffer => {
+      const database = new DatabaseSync(path);
+      try {
+        database.exec(
+          `CREATE TABLE marker (value TEXT); INSERT INTO marker VALUES ('${marker}')`,
+        );
+      } finally {
+        database.close();
+      }
+      return readFileSync(path);
+    };
+    const selectedBytes = marked(join(root, "target", "sample.db"), "SELECTED");
+    marked(join(root, "sample.db"), "WRONG");
+    const selected = `${root}/link/../sample.db`;
+    expect(await realpath(selected)).toBe(join(root, "target", "sample.db"));
+
+    const result = await cli.run({
+      arguments: [
+        "inspect-sqlite-database",
+        mode === "absolute" ? selected : "link/../sample.db",
+        "--table",
+        "marker",
+        "--json",
+      ],
+      cwd: root,
+      environment: { REA_LOG_LEVEL: "silent" },
+    });
+    expect(result.exitCode, result.stderr).toBe(0);
+    const evidence = z
+      .object({
+        subject: z.object({ digest: z.object({ sha256: z.string() }) }),
+        normalized_result: z.object({
+          rows: z.object({
+            values: z.array(z.array(z.object({ value: z.string() }))),
+          }),
+        }),
+      })
+      .parse(result.json);
+    expect(evidence.normalized_result.rows.values[0]?.[0]?.value).toBe(
+      "SELECTED",
+    );
+    expect(evidence.subject.digest.sha256).toBe(digest(selectedBytes));
   },
 );

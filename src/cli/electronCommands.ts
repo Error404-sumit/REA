@@ -1,5 +1,3 @@
-import { isAbsolute, resolve, sep } from "node:path";
-
 import { Cli, z } from "incur";
 
 import { logCliCommand } from "../cliLogging.js";
@@ -22,6 +20,7 @@ import {
 } from "../cliObservationOptions.js";
 import { runCliJavaScriptApplicationAnalysis } from "./javascriptApplicationAnalysis.js";
 import { withCommandCancellation } from "./commandCancellation.js";
+import { anchorOperatorPath } from "./operatorPath.js";
 
 /** Register CLI equivalents of the Electron MCP tools. */
 export const registerElectronCommands = (
@@ -55,23 +54,13 @@ const registerElectronFuseCommand = (
       withCommandCancellation((signal) =>
         logCliCommand(logger, CLI_COMMANDS.inspectElectronFuses, async () => {
           const result = await service.inspect(
-            { path: absoluteElectronFusePath(args.path) },
+            { path: anchorOperatorPath(args.path) },
             { signal },
           );
           return result.ok ? result.value : projectAnalysisError(result.error);
         }),
       ),
   });
-};
-
-/** Anchor relative input without changing which file symlink/.. selects. */
-const absoluteElectronFusePath = (path: string): string => {
-  if (path === "") return path;
-  // Win32 resolves dot components before directory links, including drive-relative paths.
-  if (sep === "\\") return resolve(path);
-  if (isAbsolute(path)) return path;
-  const base = process.cwd();
-  return `${base}${base.endsWith(sep) ? "" : sep}${path}`;
 };
 
 const registerElectronActiveCommand = (
