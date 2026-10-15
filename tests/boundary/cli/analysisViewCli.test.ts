@@ -1,4 +1,8 @@
-import { apiSurfaceHar } from "../../fixtures/historicalHar.js";
+import {
+  apiSurfaceHar,
+  REQUEST_HEADER_FACET_VALUES,
+  requestHeaderFacetHar,
+} from "../../fixtures/historicalHar.js";
 import { createHash } from "node:crypto";
 import { mkdir, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -19,6 +23,9 @@ import { createEvidence, parseEvidence } from "../../../src/domain/evidence.js";
 import { ghidraFunctionDossier } from "../../../src/domain/ghidraValues.fixture.js";
 import { createEvidenceBundle } from "../../../src/domain/evidenceBundle.js";
 import { inspectEvidenceBundle } from "../../../src/application/investigation/InspectEvidenceBundle.js";
+import { WebNetworkCaptureService } from "../../../src/application/WebNetworkCaptureService.js";
+import { decodeHarCapture } from "../../../src/browser/history/HarCapture.js";
+import { ok } from "../../../src/domain/result.js";
 
 cliTest(
   "projects opted-in query names through compiled CLI without query values",
@@ -466,5 +473,145 @@ cliTest(
     });
     expect(JSON.stringify(result.json)).not.toContain("password");
     expect(JSON.stringify(result.json)).not.toContain("ordinary");
+  },
+);
+
+cliTest(
+  "projects value-free header facets from decoded HAR Evidence through the compiled CLI",
+  async ({ cli }) => {
+    const root = await createTestTempDirectory("rea-header-facets-cli-");
+    const capturePath = join(root, "capture.har");
+    const environment = {
+      HOME: root,
+      XDG_CONFIG_HOME: root,
+      XDG_CACHE_HOME: root,
+    };
+    // The real HAR decoder and capture service redact credentials in process;
+    // the compiled CLI then projects the portable parent Evidence.
+    const bytes = Buffer.from(JSON.stringify(requestHeaderFacetHar()));
+    const decoded = await new WebNetworkCaptureService({
+      inspect: async () =>
+        ok({
+          ...decodeHarCapture(bytes.toString("utf8"), []),
+          artifact: {
+            path: capturePath,
+            sha256: createHash("sha256").update(bytes).digest("hex"),
+            bytes: bytes.length,
+          },
+          format: "har",
+          runtime_attribution: "unknown",
+          limitations: [],
+        }),
+    }).inspect({ capture_path: capturePath, format: "har" });
+    if (!decoded.ok) throw decoded.error;
+    const parent = decoded.value;
+    for (const value of REQUEST_HEADER_FACET_VALUES.slice(0, 3))
+      expect(JSON.stringify(parent)).not.toContain(value);
+    const views = [];
+    for (const [name, view] of [
+      ["omitted", { kind: "api-surface" }],
+      ["selected", { kind: "api-surface", request_header_facets: {} }],
+      [
+        "all",
+        {
+          kind: "api-surface",
+          request_header_facets: { scope: "all" },
+        },
+      ],
+    ] as const) {
+      const input = join(root, `${name}.json`);
+      await writeFile(
+        input,
+        JSON.stringify({ source: { kind: "inline", evidence: parent }, view }),
+      );
+      const result = await cli.run({
+        arguments: ["inspect-analysis-view", input, "--json"],
+        environment,
+      });
+      expect(result.exitCode, result.stdout).toBe(0);
+      for (const value of REQUEST_HEADER_FACET_VALUES)
+        expect(result.stdout).not.toContain(value);
+      views.push(parseEvidence(result.json));
+    }
+    const [omitted, selected, all] = views;
+    expect(omitted?.confidence).toBe("derived");
+    expect(JSON.stringify(omitted)).not.toContain("request_header_facets");
+    expect(selected).toMatchObject({
+      confidence: "inferred",
+      evidence_links: [parent.evidence_id],
+      normalized_result: {
+        header_inference_groups: 1,
+        groups: [
+          {
+            path_template: "/health",
+            request_header_facets: {
+              request_headers: [
+                { name: "x-single-sample", variation: "single-sample" },
+              ],
+            },
+          },
+          {
+            path_template: "/v1/orders",
+            record_ordinals: [0, 1, 2],
+            request_header_facets: {
+              scope: "script-settable",
+              excluded_names: 3,
+              request_headers: [
+                { name: "accept", distinct_values: 1, variation: "constant" },
+                {
+                  name: "authorization",
+                  present_records: 3,
+                  redacted_records: 3,
+                  distinct_values: null,
+                  variation: "unknown",
+                  inferences: [],
+                },
+                {
+                  name: "x-signature",
+                  distinct_values: 3,
+                  value_length: { min: 64, max: 64 },
+                  alphabets: ["hex"],
+                  variation: "per-record-unique",
+                  inferences: [
+                    { kind: "per-request-token-candidate", basis: "inferred" },
+                  ],
+                },
+                {
+                  name: "x-timestamp",
+                  alphabets: ["decimal"],
+                  inferences: [
+                    { kind: "epoch-timestamp-candidate", basis: "inferred" },
+                  ],
+                },
+              ],
+              cookie_names: [{ name: "session", record_ordinals: [0, 1] }],
+              unavailable_cookie_name_ordinals: [2],
+              set_cookie_names: [{ name: "csrf", record_ordinals: [0] }],
+              unavailable_set_cookie_name_ordinals: [],
+            },
+          },
+        ],
+      },
+    });
+    expect(all?.normalized_result).toMatchObject({
+      groups: [
+        {},
+        {
+          request_header_facets: {
+            scope: "all",
+            excluded_names: 0,
+            request_headers: [
+              ":authority",
+              "accept",
+              "authorization",
+              "cookie",
+              "sec-fetch-mode",
+              "x-signature",
+              "x-timestamp",
+            ].map((name) => expect.objectContaining({ name })),
+          },
+        },
+      ],
+    });
   },
 );

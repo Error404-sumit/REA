@@ -263,7 +263,8 @@ before WHATWG dot-segment removal, so `/a/%2e%2e/admin` and `/admin` stay distin
 at zero after the leading slash. Each matched segment lists its observed literals
 and `basis: "inferred"`. `templated_groups` counts templated groups across every
 page. Because paging follows the full grouping, every page is inferred Evidence
-when that count is nonzero, and derived Evidence only when no group was templated. Version prefixes, short opaque IDs
+when that count is nonzero, and derived Evidence only when no group was templated
+and no group carries a header inference. Version prefixes, short opaque IDs
 and digit-bearing route names stay literal. Samples merge only when method,
 origin, and exact segment rules match. The view does not infer further
 cross-sample patterns.
@@ -280,6 +281,53 @@ tab or newline as `url-unparseable`.
 Unavailable request objects or methods are explicitly excluded. Unavailable
 response fields, including HAR's `status: 0` and an empty `mimeType`, remain
 unknown, not invented statuses or MIME types.
+
+Select `request_header_facets: {}` in the view, or
+`request_header_facets: {"scope":"all"}`, to add `request_header_facets` to
+each group. Omitting the selection omits the field. Each facet reports
+its `scope`, `request_headers` rows, `cookie_names` from
+`request.cookies[].name` and `set_cookie_names` from `response.cookies[].name`.
+Cookie names keep their exact spelling and cite original record ordinals once
+per record. No header or cookie value, prefix, substring or digest is returned.
+
+The selection's `scope` defaults to `script-settable`, which omits WHATWG Fetch forbidden request-header names (including the `Proxy-`
+and `Sec-` prefixes) and HTTP/2 pseudo-headers such as `:authority`, because
+page script cannot set them; `excluded_names` counts the distinct omitted names.
+The value-dependent method-override rule is not applied. Select `all` for HAR
+from non-browser clients. Cookie names are listed in both scopes.
+
+Header rows use ASCII-lowercased names; original spellings stay in the parent.
+`present_records` counts records carrying the name; repeated field lines in one
+record form one ordered value. `distinct_values` counts distinct per-record
+values; it is null when any present value was redacted (counted in
+`redacted_records`) or is not text. `value_length` gives UTF-16 lengths of
+retained field values. `alphabets` lists the first matching rule per value:
+`decimal`, `hex`, `base64url` (optional `=` padding), `base64`, else `other`;
+these describe characters, not encodings. `variation` is `unknown` when the
+distinct count is null, otherwise `single-sample`, `constant`,
+`per-record-unique` or `varying`.
+
+`inferences` use a fixed vocabulary with `basis: "inferred"` and never read
+header names:
+
+| Inference                     | Rule                                                                                        |
+| ----------------------------- | ------------------------------------------------------------------------------------------- |
+| `per-request-token-candidate` | At least 3 records, all distinct, length at least 16, no `other`, not all `decimal`         |
+| `epoch-timestamp-candidate`   | At least 3 records, all `decimal` with one length of 10 or 13, more than one distinct value |
+
+`header_inference_groups`, present only with the selection, counts groups with
+any header inference across every page; when it is nonzero, every page is
+inferred Evidence, as for templated groups. Facets
+describe retained HAR fields only; producers may omit or sanitize cookies and
+authorization headers, so a missing name does not establish a missing field.
+`unavailable_header_name_ordinals` lists records whose header names could not
+be read. The cookie and set-cookie `unavailable_*_ordinals` list records whose
+names are unknown: the array is missing or has an unnamed entry, or it is empty
+while the matching `cookie` or `set-cookie` header was recorded or the headers
+are unreadable.
+To find the producing code, read the group's records with a `capture` view and
+`detail: "complete"`, then trace the header name, for example with
+`trace_application_feature` on JavaScript application Evidence.
 
 The view makes no handler-identity, schema or causality claim. It performs no
 network activity. Native mitmproxy, SAZ and qlog captures return a typed unsupported error.
@@ -306,6 +354,14 @@ requested page is materialized as output groups.
 Opt-in query projection reserves parser tuples and the per-record name set
 before decoding, then admits distinct retained names and source ordinals before
 changing a group. Repeated names within a request retain that ordinal once.
+Opt-in header facets reserve per-record names, maps and hash state from the
+recorded line counts before reading values. Each name's borrowed values are
+hashed in memory, one name at a time, with SHA-256 over length-prefixed UTF-16
+code units fed in fixed 1,024-unit slices, so hashing scratch does not grow with
+a value's length; each retained distinct digest
+is charged to the same budget and never serialized, and a row stops retaining
+digests once its distinct count is unknown. New rows, excluded names, cookie
+names and ordinals are admitted before a group changes.
 
 The representation budget uses conservative storage and worst-case JSON-escaping
 allowances; it is not an enforced V8 heap or process-memory limit. It is separate

@@ -1,3 +1,4 @@
+import { asciiLowercase } from "../asciiLowercase.js";
 import {
   defaultTreeAdapter,
   parse,
@@ -74,9 +75,6 @@ const inlineScriptType = (
     return "classic";
   return asciiLowercase(typeString) === "module" ? "module" : null;
 };
-
-const asciiLowercase = (value: string): string =>
-  value.replace(/[A-Z]/gu, (letter) => letter.toLowerCase());
 
 /**
  * Extract inert HTML script references, inline JavaScript bodies, and the

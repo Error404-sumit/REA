@@ -5,7 +5,11 @@ import { readFile, writeFile } from "node:fs/promises";
 import { WebNetworkCaptureService } from "../../../src/application/WebNetworkCaptureService.js";
 import { decodeHarCapture } from "../../../src/browser/history/HarCapture.js";
 import { join } from "node:path";
-import { apiSurfaceHar } from "../../fixtures/historicalHar.js";
+import {
+  apiSurfaceHar,
+  REQUEST_HEADER_FACET_VALUES,
+  requestHeaderFacetHar,
+} from "../../fixtures/historicalHar.js";
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 import { parseMcpToolError } from "../../fixtures/mcpToolError.js";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
@@ -997,4 +1001,137 @@ it("reproduces the published API surface example from decoded fixture bytes", as
   expect(parseEvidence(response.structuredContent).normalized_result).toEqual(
     API_SURFACE_EXAMPLE.output,
   );
+});
+
+it("advertises header facets and projects them identically from retained and portable MCP Evidence", async () => {
+  const bytes = Buffer.from(JSON.stringify(requestHeaderFacetHar()));
+  const service = new WebNetworkCaptureService({
+    inspect: async () =>
+      ok({
+        ...decodeHarCapture(bytes.toString("utf8"), []),
+        artifact: {
+          path: "/fixtures/signed.har",
+          sha256: createHash("sha256").update(bytes).digest("hex"),
+          bytes: bytes.length,
+        },
+        format: "har",
+        runtime_attribution: "unknown",
+        limitations: [],
+      }),
+  });
+  const { client } = await connect(undefined, service);
+  const capture = await client.callTool({
+    name: "inspect_web_network_capture",
+    arguments: { capture_path: "/fixtures/signed.har", format: "har" },
+  });
+  expect(capture.isError).not.toBe(true);
+  const parent = parseEvidence(capture.structuredContent);
+  const schemas = await advertisedMcpToolSchemas(
+    client,
+    "inspect_analysis_view",
+  );
+  const validateInput = schemas.ajv.compile(schemas.inputSchema);
+  const validateOutput = schemas.ajv.compile(schemas.outputSchema);
+  const outputs = [];
+  for (const source of [
+    { kind: "inline", evidence: parent },
+    { kind: "retained-evidence", evidence_id: parent.evidence_id },
+  ]) {
+    const args = {
+      source,
+      view: {
+        kind: "api-surface",
+        request_header_facets: { scope: "all" },
+        include_query_parameter_names: true,
+      },
+    };
+    expect(validateInput(args)).toBe(true);
+    const response = await client.callTool({
+      name: "inspect_analysis_view",
+      arguments: args,
+    });
+    expect(response.isError).not.toBe(true);
+    expect(validateOutput(response.structuredContent)).toBe(true);
+    const evidence = parseEvidence(response.structuredContent);
+    expect(evidence.confidence).toBe("inferred");
+    expect(evidence.normalized_result).toMatchObject({
+      parent_evidence_id: parent.evidence_id,
+      groups: [
+        { path_template: "/health", query_parameter_names: [] },
+        {
+          path_template: "/v1/orders",
+          query_parameter_names: [],
+          request_header_facets: {
+            scope: "all",
+            excluded_names: 0,
+            request_headers: expect.arrayContaining([
+              expect.objectContaining({
+                name: "cookie",
+                redacted_records: 3,
+                distinct_values: null,
+              }),
+              expect.objectContaining({
+                name: "sec-fetch-mode",
+                variation: "constant",
+              }),
+            ]),
+            unavailable_cookie_name_ordinals: [2],
+          },
+        },
+      ],
+    });
+    for (const value of REQUEST_HEADER_FACET_VALUES)
+      expect(JSON.stringify(response)).not.toContain(value);
+    outputs.push(evidence.normalized_result);
+  }
+  expect(outputs[0]).toEqual(outputs[1]);
+  const retained = {
+    kind: "retained-evidence",
+    evidence_id: parent.evidence_id,
+  };
+  const selection = (request_header_facets: unknown) => ({
+    source: retained,
+    view: { kind: "api-surface", request_header_facets },
+  });
+  // The advertised schema expresses the selection structurally; there is no
+  // separately advertised scope the server would reject.
+  expect(validateInput(selection({}))).toBe(true);
+  for (const rejected of [true, { scope: "page" }, { scope: "all", extra: 1 }])
+    expect(validateInput(selection(rejected))).toBe(false);
+  expect(
+    validateInput({
+      source: retained,
+      view: { kind: "api-surface", request_header_scope: "all" },
+    }),
+  ).toBe(false);
+  const defaulted = await client.callTool({
+    name: "inspect_analysis_view",
+    arguments: selection({}),
+  });
+  expect(
+    parseEvidence(defaulted.structuredContent).normalized_result,
+  ).toMatchObject({
+    view: { request_header_facets: { scope: "script-settable" } },
+    groups: [
+      {},
+      {
+        request_header_facets: { scope: "script-settable", excluded_names: 3 },
+      },
+    ],
+  });
+  const refused = await client.callTool({
+    name: "inspect_analysis_view",
+    arguments: selection({ scope: "page" }),
+  });
+  expect(refused.isError).toBe(true);
+  expect(parseMcpToolError(refused).error).toMatchObject({
+    code: "invalid_request",
+    details: {
+      issues: [
+        expect.objectContaining({
+          path: ["view", "request_header_facets", "scope"],
+        }),
+      ],
+    },
+  });
 });

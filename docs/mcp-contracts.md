@@ -206,8 +206,8 @@ the complete inspection and its atomic inventory Evidence remain retained.
 `inspect_analysis_view` also accepts `api-surface` for retained HAR capture Evidence,
 grouping request lines by method, origin and format-rule path template. Templated
 segments are inferences. Because paging follows the full grouping, every page is
-inferred Evidence whenever any group is templated, and derived Evidence only when
-no group was templated.
+inferred Evidence whenever any group is templated or, with opt-in request header
+facets, any group carries a header inference; otherwise it is derived Evidence.
 See [derived API surfaces](web-network-captures.md#derived-api-surface).
 
 `inspect_analysis_view` projects a caller-selected view of already completed

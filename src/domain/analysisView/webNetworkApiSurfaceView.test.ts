@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { REQUEST_HEADER_FACET_VALUES } from "../../../tests/fixtures/historicalHar.js";
 import { expect, it } from "vitest";
 import {
   analysisViewCaptureFixture,
@@ -562,4 +564,430 @@ it("compares media types case-insensitively and counts templated groups across p
     flags: [],
   });
   expect(result.value.templated_groups).toBe(1);
+});
+
+const HEADER_NONCES = [
+  "AbCdEfGhIjKlMnOpQrSt_1",
+  "AbCdEfGhIjKlMnOpQrSt-2",
+  "AbCdEfGhIjKlMnOpQrSt_3",
+];
+
+/** Decoded-HAR records: credential values are null with their redaction sidecars. */
+const headerFacetCapture = () => {
+  const capture = analysisViewCaptureFixture();
+  const template = capture.records[0]!;
+  const record = (
+    ordinal: number,
+    request: Record<string, unknown>,
+    response: Record<string, unknown>,
+  ) => {
+    const headers = (request.headers ?? []) as { value: unknown }[];
+    const responseHeaders = (response.headers ?? []) as { value: unknown }[];
+    return {
+      ...template,
+      ordinal,
+      location: {
+        kind: "json-pointer" as const,
+        pointer: `/log/entries/${ordinal}`,
+      },
+      reported: JSON.parse(JSON.stringify({ request, response })),
+      redactions: [
+        ...headers.flatMap((header, index) =>
+          header.value === null
+            ? [
+                {
+                  pointer: `/request/headers/${index}/value`,
+                  reason: "transport-credential" as const,
+                },
+              ]
+            : [],
+        ),
+        ...responseHeaders.flatMap((header, index) =>
+          header.value === null
+            ? [
+                {
+                  pointer: `/response/headers/${index}/value`,
+                  reason: "transport-credential" as const,
+                },
+              ]
+            : [],
+        ),
+      ],
+    };
+  };
+  const signed = [7, 2, 11].map((ordinal, index) =>
+    record(
+      ordinal,
+      {
+        method: "POST",
+        url: "https://api.test/v1/orders",
+        headers: [
+          { name: ":authority", value: "api.test" },
+          { name: "Authorization", value: null },
+          {
+            name: "X-Signature",
+            value: REQUEST_HEADER_FACET_VALUES[3 + index],
+          },
+          {
+            name: "X-Timestamp",
+            value: REQUEST_HEADER_FACET_VALUES[6 + index],
+          },
+          { name: "Accept", value: "application/vnd.fixture-accept+json" },
+          ...(index === 0 ? [{ name: "ACCEPT", value: "text/plain" }] : []),
+          { name: "Sec-Fetch-Mode", value: "navigate-fixture" },
+          { name: "Cookie", value: null },
+          { name: "X-Nonce", value: HEADER_NONCES[index] },
+        ],
+        cookies: [
+          [{ name: "session", value: null }],
+          [
+            { name: "session", value: null },
+            { name: "theme", value: null },
+          ],
+          [],
+        ][index],
+      },
+      {
+        status: 201,
+        content: { mimeType: "application/json" },
+        headers: index === 1 ? [] : [{ name: "Set-Cookie", value: null }],
+        cookies: index === 0 ? [{ name: "csrf", value: null }] : [],
+      },
+    ),
+  );
+  capture.total_records = 20;
+  capture.records = [
+    ...signed,
+    record(
+      4,
+      {
+        method: "GET",
+        url: "https://api.test/health",
+        headers: [{ name: "X-Single-Sample", value: "only-once-value" }],
+        cookies: [],
+      },
+      {
+        status: 200,
+        content: { mimeType: "text/plain" },
+        headers: [],
+        cookies: [],
+      },
+    ),
+  ];
+  return capture;
+};
+
+const projectSurface = (
+  capture: ReturnType<typeof analysisViewCaptureFixture>,
+  selection: Record<string, unknown> = {},
+  parameters: unknown = { sensitive_value_count: 0 },
+) => {
+  const parent = analysisViewCaptureEvidence(capture);
+  return projectAnalysisView(
+    {
+      evidenceId: parent.evidence_id,
+      operation: parent.operation,
+      normalizedResult: parent.normalized_result,
+      limitations: [],
+      parameters,
+    },
+    { kind: "api-surface", offset: 0, limit: 50, ...selection },
+  );
+};
+
+const surfaceOf = (result: ReturnType<typeof projectSurface>) => {
+  if (!result.ok) throw result.error;
+  if (result.value.kind !== "api-surface") throw new Error("Expected surface");
+  return result.value;
+};
+
+it("keeps default API-surface bytes unchanged for header-rich records", () => {
+  const omitted = surfaceOf(projectSurface(headerFacetCapture()));
+  // Digest of this projection computed by unmodified main code (fffb07419,
+  // which includes null relationship_coverage in Evidence IDs); header facets
+  // must not alter it.
+  expect(
+    createHash("sha256").update(JSON.stringify(omitted)).digest("hex"),
+  ).toBe("b305989dd76bd6a606f7e26c070a4ff3cce5ac513d4ebb11432adcc3f655e6bb");
+});
+
+it("reports value-free header, cookie and set-cookie facets with labelled inferences", () => {
+  const capture = headerFacetCapture();
+  const omitted = surfaceOf(projectSurface(capture));
+  const selected = surfaceOf(
+    projectSurface(capture, {
+      request_header_facets: { scope: "script-settable" },
+    }),
+  );
+  expect(
+    selected.groups.map(
+      ({ request_header_facets: _facets, ...group }) => group,
+    ),
+  ).toEqual(omitted.groups);
+  const token = [{ kind: "per-request-token-candidate", basis: "inferred" }];
+  expect(selected.groups.map((group) => group.request_header_facets)).toEqual([
+    {
+      scope: "script-settable",
+      excluded_names: 0,
+      request_headers: [
+        {
+          name: "x-single-sample",
+          present_records: 1,
+          redacted_records: 0,
+          distinct_values: 1,
+          value_length: { min: 15, max: 15 },
+          alphabets: ["base64url"],
+          variation: "single-sample",
+          inferences: [],
+        },
+      ],
+      unavailable_header_name_ordinals: [],
+      cookie_names: [],
+      unavailable_cookie_name_ordinals: [],
+      set_cookie_names: [],
+      unavailable_set_cookie_name_ordinals: [],
+    },
+    {
+      scope: "script-settable",
+      excluded_names: 3,
+      request_headers: [
+        {
+          name: "accept",
+          present_records: 3,
+          redacted_records: 0,
+          distinct_values: 2,
+          value_length: { min: 10, max: 35 },
+          alphabets: ["base64", "other"],
+          variation: "varying",
+          inferences: [],
+        },
+        {
+          name: "authorization",
+          present_records: 3,
+          redacted_records: 3,
+          distinct_values: null,
+          value_length: null,
+          alphabets: [],
+          variation: "unknown",
+          inferences: [],
+        },
+        {
+          name: "x-nonce",
+          present_records: 3,
+          redacted_records: 0,
+          distinct_values: 3,
+          value_length: { min: 22, max: 22 },
+          alphabets: ["base64url"],
+          variation: "per-record-unique",
+          inferences: token,
+        },
+        {
+          name: "x-signature",
+          present_records: 3,
+          redacted_records: 0,
+          distinct_values: 3,
+          value_length: { min: 64, max: 64 },
+          alphabets: ["hex"],
+          variation: "per-record-unique",
+          inferences: token,
+        },
+        {
+          name: "x-timestamp",
+          present_records: 3,
+          redacted_records: 0,
+          distinct_values: 3,
+          value_length: { min: 13, max: 13 },
+          alphabets: ["decimal"],
+          variation: "per-record-unique",
+          inferences: [
+            { kind: "epoch-timestamp-candidate", basis: "inferred" },
+          ],
+        },
+      ],
+      unavailable_header_name_ordinals: [],
+      cookie_names: [
+        { name: "session", record_ordinals: [7, 2] },
+        { name: "theme", record_ordinals: [2] },
+      ],
+      unavailable_cookie_name_ordinals: [11],
+      set_cookie_names: [{ name: "csrf", record_ordinals: [7] }],
+      unavailable_set_cookie_name_ordinals: [11],
+    },
+  ]);
+  expect(selected.limitations.length).toBe(omitted.limitations.length + 1);
+  expect(selected.header_inference_groups).toBe(1);
+  expect(Object.hasOwn(omitted, "header_inference_groups")).toBe(false);
+  const all = surfaceOf(
+    projectSurface(capture, {
+      request_header_facets: { scope: "all" },
+    }),
+  );
+  const orders = all.groups[1]?.request_header_facets;
+  expect(orders).toMatchObject({ scope: "all", excluded_names: 0 });
+  expect(orders?.request_headers.map((header) => header.name)).toEqual([
+    ":authority",
+    "accept",
+    "authorization",
+    "cookie",
+    "sec-fetch-mode",
+    "x-nonce",
+    "x-signature",
+    "x-timestamp",
+  ]);
+  expect(orders?.request_headers[3]).toMatchObject({
+    name: "cookie",
+    redacted_records: 3,
+    distinct_values: null,
+    variation: "unknown",
+  });
+  expect(orders?.request_headers[4]).toMatchObject({
+    alphabets: ["base64url"],
+    variation: "constant",
+    inferences: [],
+  });
+  for (const view of [selected, all])
+    for (const value of [...REQUEST_HEADER_FACET_VALUES, ...HEADER_NONCES])
+      expect(JSON.stringify(view)).not.toContain(value);
+});
+
+it("applies fixed inference thresholds without reading header names", () => {
+  const capture = analysisViewCaptureFixture();
+  const columns: Record<string, readonly (string | undefined)[]> = {
+    // Two samples are too few for a per-request token.
+    "x-a": ["0123456789abcdef0", "0123456789abcdef1", undefined],
+    // Two varying epoch-shaped samples are too few for a timestamp candidate.
+    "x-h": ["1760000000", "1760000001", undefined],
+    // Fifteen characters are too short.
+    "x-b": ["0123456789abcde", "0123456789abcdf", "0123456789abce0"],
+    // Every value is decimal: an epoch candidate, not a token.
+    "x-c": ["1760000000", "1760000001", "1760000000"],
+    // Constant decimals do not vary.
+    "x-d": ["1760000000000", "1760000000000", "1760000000000"],
+    // Mixed epoch widths are not one timestamp shape.
+    "x-e": ["1760000000", "1760000000000", "1760000000001"],
+    // Padded base64 with a repeat varies but is not unique.
+    "x-f": [
+      "ab+/cdefghijklmnop==",
+      "ab+/cdefghijklmnop==",
+      "ab+/cdefghijklmnoq==",
+    ],
+    // One value outside the token alphabets prevents the token rule.
+    "x-g": ["0123456789abcdef0", "0123456789abcdef1", "0123456789abcdef.2"],
+    // Names do not select rules; Unicode and empty values are other.
+    authorization: ["雪0123456789abcdef", "", "0123456789abcdef9"],
+  };
+  capture.records = capture.records.slice(0, 3).map((record, index) => ({
+    ...record,
+    reported: {
+      request: {
+        method: "GET",
+        url: "https://api.test/plain",
+        headers: Object.entries(columns).flatMap(([name, values]) =>
+          values[index] === undefined ? [] : [{ name, value: values[index] }],
+        ),
+        cookies: [],
+      },
+      response: { status: 200, headers: [], cookies: [] },
+    },
+  }));
+  const surface = surfaceOf(
+    projectSurface(capture, {
+      request_header_facets: { scope: "script-settable" },
+    }),
+  );
+  const rows = surface.groups[0]?.request_header_facets?.request_headers ?? [];
+  expect(
+    Object.fromEntries(
+      rows.map((row) => [
+        row.name,
+        [row.variation, row.alphabets, row.inferences.map((item) => item.kind)],
+      ]),
+    ),
+  ).toEqual({
+    authorization: ["per-record-unique", ["hex", "other"], []],
+    "x-a": ["per-record-unique", ["hex"], []],
+    "x-b": ["per-record-unique", ["hex"], []],
+    "x-c": ["varying", ["decimal"], ["epoch-timestamp-candidate"]],
+    "x-d": ["constant", ["decimal"], []],
+    "x-e": ["per-record-unique", ["decimal"], []],
+    "x-f": ["varying", ["base64"], []],
+    "x-g": ["per-record-unique", ["hex", "other"], []],
+    "x-h": ["per-record-unique", ["decimal"], []],
+  });
+  expect(surface.templated_groups).toBe(0);
+  expect(surface.header_inference_groups).toBe(1);
+});
+
+it("keeps unreadable header and cookie names unknown instead of absent", () => {
+  const capture = analysisViewCaptureFixture();
+  const reported = [
+    {
+      request: {
+        method: "GET",
+        url: "https://api.test/partial",
+        headers: [
+          { name: "X-Producer-Null", value: null },
+          { name: 7, value: "unnamed" },
+        ],
+        cookies: [{ value: "nameless" }, { name: "kept" }],
+      },
+      response: { status: 200, headers: "unavailable", cookies: [] },
+    },
+    {
+      request: {
+        method: "GET",
+        url: "https://api.test/partial",
+        headers: [{ name: "x-producer-null", value: "zzvalue" }],
+        cookies: "unavailable",
+      },
+    },
+  ];
+  capture.records = capture.records.slice(0, 2).map((record, index) => ({
+    ...record,
+    reported: reported[index]!,
+  }));
+  const facets = surfaceOf(
+    projectSurface(capture, {
+      request_header_facets: { scope: "script-settable" },
+    }),
+  ).groups[0]?.request_header_facets;
+  expect(facets).toEqual({
+    scope: "script-settable",
+    excluded_names: 0,
+    request_headers: [
+      {
+        name: "x-producer-null",
+        present_records: 2,
+        redacted_records: 0,
+        distinct_values: null,
+        value_length: { min: 7, max: 7 },
+        alphabets: ["base64url"],
+        variation: "unknown",
+        inferences: [],
+      },
+    ],
+    unavailable_header_name_ordinals: [0],
+    cookie_names: [{ name: "kept", record_ordinals: [0] }],
+    unavailable_cookie_name_ordinals: [0, 1],
+    set_cookie_names: [],
+    unavailable_set_cookie_name_ordinals: [0, 1],
+  });
+  for (const value of ["unnamed", "nameless", "zzvalue"])
+    expect(JSON.stringify(facets)).not.toContain(value);
+});
+
+it("preserves sensitive-parent refusal when header facets are selected", () => {
+  expect(
+    projectSurface(
+      headerFacetCapture(),
+      { request_header_facets: { scope: "all" } },
+      { sensitive_value_count: 1 },
+    ),
+  ).toMatchObject({
+    ok: false,
+    error: {
+      _tag: "AnalysisUnsupportedTargetError",
+      reason: "sensitive_values_unretained",
+    },
+  });
 });

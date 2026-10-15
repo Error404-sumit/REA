@@ -10,11 +10,28 @@ import type {
   UnsignedAnalysisView,
 } from "./analysisView.js";
 import { WebNetworkApiSurfaceAccumulator } from "./WebNetworkApiSurfaceAccumulator.js";
+import {
+  REQUEST_HEADER_SCOPES,
+  requestHeaderFacetsSchema,
+} from "./webNetworkRequestHeaderFacets.js";
 
 export const apiSurfaceViewSchema = z.strictObject({
   kind: z.literal("api-surface"),
   offset: z.number().int().nonnegative().default(0),
   limit: z.number().int().positive().default(50),
+  request_header_facets: z
+    .strictObject({
+      scope: z
+        .enum(REQUEST_HEADER_SCOPES)
+        .default("script-settable")
+        .describe(
+          "script-settable counts but does not list WHATWG forbidden request-header names and HTTP/2 pseudo-headers; all lists every recorded name, for example for non-browser clients.",
+        ),
+    })
+    .optional()
+    .describe(
+      "Select value-free request header, cookie and set-cookie name facets per group: presence and distinct-value counts, value lengths, alphabets and labelled inferences. Values, prefixes and digests are never returned. Omit to leave groups unchanged.",
+    ),
   include_query_parameter_names: z
     .boolean()
     .optional()
@@ -46,6 +63,7 @@ const groupSchema = z.strictObject({
       }),
     )
     .optional(),
+  request_header_facets: requestHeaderFacetsSchema.optional(),
   flags: z.array(
     z.enum(["single-sample", "mixed-statuses", "mixed-content-types"]),
   ),
@@ -62,6 +80,14 @@ export const apiSurfaceFields = {
     .nonnegative()
     .describe(
       "Groups across every page that carry at least one templated segment.",
+    ),
+  header_inference_groups: z
+    .number()
+    .int()
+    .nonnegative()
+    .optional()
+    .describe(
+      "Present only with request_header_facets selected: groups across every page with at least one request header inference.",
     ),
   groups: z.array(groupSchema),
   excluded_records: z.array(
@@ -80,10 +106,7 @@ export const apiSurfaceFields = {
 export const projectWebNetworkApiSurfaceView = (
   parent: AnalysisViewParent,
   view: AnalysisViewRequest,
-  accumulator = new WebNetworkApiSurfaceAccumulator(
-    undefined,
-    view.kind === "api-surface" && view.include_query_parameter_names === true,
-  ),
+  accumulator = WebNetworkApiSurfaceAccumulator.forView(view),
 ): Result<UnsignedAnalysisView, AnalysisError> => {
   const unsupported = (reason: string) =>
     err(
@@ -131,6 +154,11 @@ export const projectWebNetworkApiSurfaceView = (
     ...(view.include_query_parameter_names === true
       ? [
           "Observed query parameter names do not establish required parameters, value types or a complete API schema.",
+        ]
+      : []),
+    ...(view.request_header_facets !== undefined
+      ? [
+          "Request header and cookie facets cover retained HAR fields only; producers may omit or sanitize them. Counts, lengths and alphabets are derived without returning values, and inferences apply fixed value-shape rules that do not establish a header's role.",
         ]
       : []),
     ...(capture.records.length < capture.total_records

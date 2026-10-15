@@ -51,10 +51,7 @@ export const inspectAnalysisViewValidated = (
 ): Result<Evidence, AnalysisError> => {
   const accumulator =
     input.view.kind === "api-surface"
-      ? new WebNetworkApiSurfaceAccumulator(
-          undefined,
-          input.view.include_query_parameter_names === true,
-        )
+      ? WebNetworkApiSurfaceAccumulator.forView(input.view)
       : undefined;
   if (input.source.kind === "inline") {
     const admitted =
@@ -218,8 +215,10 @@ const createAnalysisViewEvidence = (
     result: jsonValueSchema.parse(result),
     rawResult: null,
     confidence:
-      // Paging follows the full grouping, so any templated group makes every page inferred.
-      result.kind === "api-surface" && result.templated_groups > 0
+      // Paging follows the full grouping, so any templated group or header
+      // inference makes every page inferred.
+      result.kind === "api-surface" &&
+      (result.templated_groups > 0 || (result.header_inference_groups ?? 0) > 0)
         ? "inferred"
         : "derived",
     authority: parent.authority,

@@ -745,3 +745,70 @@ it("admits raw_result and parameters before authenticating a portable capture", 
     });
   }
 });
+
+it("labels every page inferred when any group carries a header inference", () => {
+  const capture = analysisViewCaptureFixture();
+  const tokens = [
+    "0123456789abcdef0",
+    "0123456789abcdef1",
+    "0123456789abcdef2",
+  ];
+  capture.records = capture.records.slice(0, 4).map((record, index) => ({
+    ...record,
+    reported: {
+      request: {
+        method: "GET",
+        url: `https://api.test/${index < 3 ? "a" : "b"}`,
+        headers: [{ name: "X-Value", value: tokens[index] ?? "plain" }],
+        cookies: [],
+      },
+    },
+  }));
+  const parent = analysisViewCaptureEvidence(capture);
+  const project = (view: Record<string, unknown>, evidence = parent) => {
+    const result = inspectAnalysisView({
+      source: { kind: "inline", evidence },
+      view: { kind: "api-surface", ...view },
+    });
+    if (!result.ok) throw result.error;
+    return result.value;
+  };
+  expect(project({}).confidence).toBe("derived");
+  // Paging follows the full grouping: the inference-free /b page is inferred too.
+  for (const offset of [0, 1])
+    expect(
+      project({ request_header_facets: {}, offset, limit: 1 }),
+    ).toMatchObject({
+      confidence: "inferred",
+      normalized_result: {
+        view: { request_header_facets: { scope: "script-settable" } },
+        header_inference_groups: 1,
+      },
+    });
+  const plain = analysisViewCaptureEvidence({
+    ...capture,
+    records: capture.records.slice(3),
+  });
+  expect(
+    project({ request_header_facets: { scope: "all" } }, plain),
+  ).toMatchObject({
+    confidence: "derived",
+    normalized_result: { header_inference_groups: 0 },
+  });
+  expect(
+    inspectAnalysisView({
+      source: { kind: "inline", evidence: parent },
+      view: { kind: "api-surface", request_header_facets: { scope: "page" } },
+    }),
+  ).toMatchObject({
+    ok: false,
+    error: {
+      _tag: "AnalysisInputError",
+      issues: [
+        expect.objectContaining({
+          path: ["view", "request_header_facets", "scope"],
+        }),
+      ],
+    },
+  });
+});

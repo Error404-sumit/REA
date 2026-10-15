@@ -12,8 +12,19 @@ import {
   WEB_NETWORK_CAPTURE_LIMITS,
   type WebNetworkCaptureRecord,
 } from "../webNetworkCapture.js";
+import {
+  RequestHeaderFacetCollector,
+  readRecordHeaderFacts,
+  recordHeaderScratchBytes,
+  type RecordHeaderFacts,
+  type RequestHeaderFacetCost,
+  type RequestHeaderScope,
+} from "./webNetworkRequestHeaderFacets.js";
 import { pageViewCoverage } from "./analysisViewCoverage.js";
-import type { UnsignedAnalysisView } from "./analysisView.js";
+import type {
+  AnalysisViewRequest,
+  UnsignedAnalysisView,
+} from "./analysisView.js";
 
 type Surface = Extract<UnsignedAnalysisView, { kind: "api-surface" }>;
 type Group = Surface["groups"][number];
@@ -42,6 +53,7 @@ interface GroupState {
   readonly statuses: Set<number>;
   readonly contentTypes: Set<string>;
   readonly queryNames?: Map<string, number[]>;
+  readonly headerFacets?: RequestHeaderFacetCollector;
 }
 type Buckets = Map<string, Map<string, Map<string, Map<string, GroupState>>>>;
 
@@ -87,6 +99,15 @@ const RECORD_SCRATCH_BYTES = 512;
 const SEGMENT_SCRATCH_BYTES = 512;
 const CAPTURE_CONTAINER_BYTES = 512;
 const textBytes = (length: number): number => 32 + length * 14;
+// A Set entry plus a 32-character in-memory digest; digests are never serialized.
+const DIGEST_BYTES = ENTRY_BYTES + 64;
+const HEADER_FACET_COST: RequestHeaderFacetCost = {
+  entry: ENTRY_BYTES,
+  container: CAPTURE_CONTAINER_BYTES,
+  scratch: RECORD_SCRATCH_BYTES,
+  digest: DIGEST_BYTES,
+  text: textBytes,
+};
 
 const segmentRule = (value: string): Rule | null => {
   if (/^[0-9]+$/u.test(value)) return "numeric";
@@ -108,6 +129,14 @@ const segmentRule = (value: string): Rule | null => {
   return null;
 };
 
+/** Caller selections and the projection budget; omitted keys keep defaults. */
+export interface WebNetworkApiSurfaceAccumulatorOptions {
+  readonly maximumBytes?: number;
+  readonly includeQueryParameterNames?: boolean;
+  /** Selected request header facet scope; undefined omits header facets. */
+  readonly requestHeaderScope?: RequestHeaderScope;
+}
+
 /** Own group identity, deduplication and admission for the entire projection. */
 export class WebNetworkApiSurfaceAccumulator {
   readonly #buckets: Buckets = new Map();
@@ -118,10 +147,29 @@ export class WebNetworkApiSurfaceAccumulator {
   #retainedBytes = 0;
   #temporaryBytes = 0;
 
-  constructor(
-    readonly maximumBytes = WEB_NETWORK_CAPTURE_LIMITS.outputBytes,
-    readonly includeQueryParameterNames = false,
-  ) {}
+  readonly maximumBytes: number;
+  readonly includeQueryParameterNames: boolean;
+  readonly requestHeaderScope: RequestHeaderScope | undefined;
+
+  constructor(options: WebNetworkApiSurfaceAccumulatorOptions = {}) {
+    this.maximumBytes =
+      options.maximumBytes ?? WEB_NETWORK_CAPTURE_LIMITS.outputBytes;
+    this.includeQueryParameterNames =
+      options.includeQueryParameterNames ?? false;
+    this.requestHeaderScope = options.requestHeaderScope;
+  }
+
+  /** Share selection interpretation between pre-admission and direct projection. */
+  static forView(view: AnalysisViewRequest): WebNetworkApiSurfaceAccumulator {
+    if (view.kind !== "api-surface")
+      return new WebNetworkApiSurfaceAccumulator();
+    return new WebNetworkApiSurfaceAccumulator({
+      includeQueryParameterNames: view.include_query_parameter_names === true,
+      ...(view.request_header_facets === undefined
+        ? {}
+        : { requestHeaderScope: view.request_header_facets.scope }),
+    });
+  }
 
   #retain(bytes: number): boolean {
     if (this.#retainedBytes + this.#temporaryBytes + bytes > this.maximumBytes)
@@ -258,6 +306,8 @@ export class WebNetworkApiSurfaceAccumulator {
       if (!route.ok) return route;
       const queryNames = this.#queryNames(parsed.query);
       if (!queryNames.ok) return queryNames;
+      const headers = this.#headerFacts(record);
+      if (!headers.ok) return headers;
       return this.#append(
         record.ordinal,
         method,
@@ -266,6 +316,7 @@ export class WebNetworkApiSurfaceAccumulator {
         typeof status === "number" && status !== 0 ? status : null,
         mediaTypeEssence(rawMime),
         queryNames.value,
+        headers.value,
       );
     } finally {
       // Per-record strings and descriptors never become cumulative scratch.
@@ -293,6 +344,16 @@ export class WebNetworkApiSurfaceAccumulator {
     return ok(new Set(parseUrlQueryParameterNames(query)));
   }
 
+  #headerFacts(
+    record: WebNetworkCaptureRecord,
+  ): Result<RecordHeaderFacts | undefined, AnalysisError> {
+    if (this.requestHeaderScope === undefined) return ok(undefined);
+    // Reserve names, maps and hash state before any header line is read.
+    if (!this.#temporary(recordHeaderScratchBytes(record, HEADER_FACET_COST)))
+      return this.#overBudget();
+    return ok(readRecordHeaderFacts(record, this.requestHeaderScope));
+  }
+
   #append(
     ordinal: number,
     method: string,
@@ -301,6 +362,7 @@ export class WebNetworkApiSurfaceAccumulator {
     status: number | null,
     mime: string | null,
     queryNames: ReadonlySet<string> | undefined,
+    headers: RecordHeaderFacts | undefined,
   ): Result<void, AnalysisError> {
     let group = this.#buckets
       .get(method)
@@ -334,6 +396,12 @@ export class WebNetworkApiSurfaceAccumulator {
           bytes += ENTRY_BYTES + textBytes(name.length);
       }
     }
+    if (headers !== undefined)
+      bytes += RequestHeaderFacetCollector.admissionBytes(
+        headers,
+        group?.headerFacets,
+        HEADER_FACET_COST,
+      );
     // Reserve the whole mutation while route scratch is still live. No sets,
     // map entries, arrays or new observed values are retained before admission.
     if (!this.#retain(bytes)) return this.#overBudget();
@@ -347,6 +415,13 @@ export class WebNetworkApiSurfaceAccumulator {
           rule: segment.rule,
           values: new Set([segment.value]),
         })),
+        ...(this.requestHeaderScope === undefined
+          ? {}
+          : {
+              headerFacets: new RequestHeaderFacetCollector(
+                this.requestHeaderScope,
+              ),
+            }),
         ordinals: [],
         statuses: new Set(),
         contentTypes: new Set(),
@@ -375,6 +450,7 @@ export class WebNetworkApiSurfaceAccumulator {
         else ordinals.push(ordinal);
       }
     }
+    if (headers !== undefined) group.headerFacets?.add(headers, ordinal);
     return ok(undefined);
   }
 
@@ -386,6 +462,7 @@ export class WebNetworkApiSurfaceAccumulator {
     | "coverage"
     | "groups"
     | "templated_groups"
+    | "header_inference_groups"
     | "excluded_records"
     | "limitations"
     | "unknowns"
@@ -421,6 +498,9 @@ export class WebNetworkApiSurfaceAccumulator {
                   record_ordinals: [...record_ordinals],
                 })),
             }),
+        ...(group.headerFacets === undefined
+          ? {}
+          : { request_header_facets: group.headerFacets.project() }),
         flags: [
           ...(group.ordinals.length === 1 ? ["single-sample" as const] : []),
           ...(group.statuses.size > 1 ? ["mixed-statuses" as const] : []),
@@ -436,6 +516,15 @@ export class WebNetworkApiSurfaceAccumulator {
         (count, group) => count + (group.segments.length > 0 ? 1 : 0),
         0,
       ),
+      ...(this.requestHeaderScope === undefined
+        ? {}
+        : {
+            header_inference_groups: this.#groups.reduce(
+              (count, group) =>
+                count + (group.headerFacets?.inferred() === true ? 1 : 0),
+              0,
+            ),
+          }),
       excluded_records: [...this.#excluded],
       limitations: [...this.#limitations].sort(compare),
       unknowns: this.#unavailableResponse

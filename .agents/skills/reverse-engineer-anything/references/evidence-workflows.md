@@ -65,6 +65,11 @@ Use `inspect_analysis_view` with `view: {kind: "api-surface"}` on retained
 method, origin and path template. Format matches are inferences, not handler
 identity or schemas. Group pages cite parent record ordinals; consult record
 coverage and exclusions before claiming completeness. No requests are replayed.
+When advertised, `request_header_facets: {}` lists request header, cookie and
+set-cookie names per group with value-free presence, distinct-value, length and
+alphabet facts; `request_header_facets: {scope: "all"}` also lists
+browser-forbidden names for non-browser HAR. Token and timestamp candidates are
+value-shape inferences, not header roles; trace the header name in client code.
 When the connected schema advertises `include_query_parameter_names`, select
 it in the view for distinct observed names with original record ordinals. Query
 values are omitted; the names establish neither required parameters nor a
